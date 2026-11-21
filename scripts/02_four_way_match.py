@@ -135,7 +135,7 @@ def mean_center_and_normalize(vectors: list[dict[str, float]]) -> tuple[list[dic
             if abs(diff) > 1e-5:
                 shifted[k] = diff / denom
         for k, mval in mu_sig.items():
-            if k not in vec and mval > 0.01:
+            if k not in vec and abs(mval) > 0.01:
                 shifted[k] = -mval / denom
         centered.append(shifted)
     return centered, dict(mu)

@@ -73,7 +73,9 @@ def validate_kit(
                     diagnostics.append(f"FORBIDDEN_PII_TERM '{term}' found in {fname}")
                     passed = False
 
-        unconfirmed_total += text.count("[待确认]")
+        # Skip backtick-quoted meta references like `[待确认]` in AI collaboration instructions (e.g. AGENTS.md)
+        cleaned_for_unconfirmed = re.sub(r"`\[待确认\]`", "", text)
+        unconfirmed_total += cleaned_for_unconfirmed.count("[待确认]")
         placeholders = PLACEHOLDER_RE.findall(text)
         if strict and placeholders:
             diagnostics.append(f"UNFILLED placeholders in {fname}: {placeholders[:5]}")

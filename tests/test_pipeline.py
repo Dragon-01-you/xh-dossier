@@ -147,6 +147,7 @@ def test_end_to_end_four_way_pipeline(tmp_path: pathlib.Path) -> None:
 
     assert report["records"] >= 7
     assert "Way 1" in md and "Way 3" in md and "Way 4" in md
+    assert "跨越" in md
     assert "[已拦截" in md
     assert "[待确认]" in md
 
@@ -171,13 +172,18 @@ def test_validate_kit_templates_placeholders_and_pii(tmp_path: pathlib.Path) -> 
     assert not ok_half
     assert any("UNFILLED" in m for m in msgs_half)
 
-    # Complete clean user kit passes strict mode, but local user path triggers PII warning
+    # Complete clean user kit (keeping template AGENTS.md rule mentioning `[待确认]`) passes strict mode
     clean_kit = tmp_path / "clean_kit"
     clean_kit.mkdir()
     for fname in mod_val.REQUIRED_KIT_FILES:
         (clean_kit / fname).write_text(f"# {fname}\n\n" + "这是经过核实并亲口拍板的真实个人核心记录条目，用于测试验证完整性。" * 3, encoding="utf-8")
+    (clean_kit / "AGENTS.md").write_text((REPO_ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8")
     ok_clean, msgs_clean = mod_val.validate_kit(clean_kit, strict=True)
     assert ok_clean, msgs_clean
+
+    ok_forbidden, msgs_forbidden = mod_val.validate_kit(clean_kit, strict=True, forbidden_terms=["真实个人核心记录"])
+    assert not ok_forbidden
+    assert any("FORBIDDEN_PII_TERM" in m for m in msgs_forbidden)
 
     (clean_kit / "00-总入口索引.md").write_text("# 00\n\n" + "正文记录" * 30 + "\n路径: C:\\Users\\Alice\\secret", encoding="utf-8")
     ok_leak, msgs_leak = mod_val.validate_kit(clean_kit, strict=True)
