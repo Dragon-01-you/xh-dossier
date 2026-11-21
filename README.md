@@ -1,9 +1,9 @@
-# AI Onboarding Kit · 跨平台 AI 入职说明书全流程开源包
+# XH-Dossier · 跨平台 AI 入职说明书全流程开源包
 
 > 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。  
 > 适用于 **任何本地 Agent**（Antigravity / Claude Code / Codex / Cursor / Hermes）以及 **网页端对话模型**（豆包 / DeepSeek / ChatGPT / Kimi）。
 
-[![CI](https://img.shields.io/badge/CI-pytest%20%2B%204--way%20demo-black)](#三三分钟现场演示零依赖直接可跑)
+[![CI](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml/badge.svg)](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-gray)](LICENSE)
 
 ---
@@ -38,11 +38,11 @@
 - **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，每次 3 个选择题，4~5 轮生成初稿。
 - **网页端用户**：复制 [prompts/01_web_ai_interviewer.md](prompts/01_web_ai_interviewer.md) 里的 10 行提示词直接发给豆包 / DeepSeek。
 
-### Stage 2：多平台聊天记录导出（含浏览器插件开关避坑）
-详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)。  
+### Stage 2：多平台聊天记录导出（内置 ScriptCat 脚本猫向导 + 开关避坑）
+详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。  
 **⚠️ 浏览器扩展/脚本导出最容易卡住的一步**：
 1. 打开浏览器扩展管理页（`chrome://extensions` 或 `edge://extensions`）→ 打开右上角 **「开发者模式」**；
-2. 点击导出扩展/脚本管理器的 **「扩展详细信息 / 详情」**；
+2. 点击 **ScriptCat（脚本猫）** 的 **「扩展详细信息 / 详情」**；
 3. 打开 **「允许运行用户脚本（Allow User Scripts）」** 与 **「允许访问文件网址」** 开关，返回聊天页强刷即可导出原件进 `raw/`（只读不动，绝不提前让大模型写摘要覆盖原文）。
 
 ### Stage 3：多 Agent 清洗 + 四路匹配技术（不靠瞎总结）

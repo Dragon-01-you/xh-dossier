@@ -14,9 +14,37 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+mod_wizard = import_module("00_export_wizard")
 mod_clean = import_module("01_clean_and_index")
 mod_match = import_module("02_four_way_match")
 mod_val = import_module("03_validate_kit")
+
+
+def test_export_wizard_requires_consent_and_supports_dry_run(capsys: pytest.CaptureFixture[str]) -> None:
+    opened: list[str] = []
+    # Declining consent must perform zero external browser/download side effects
+    res_declined = mod_wizard.run_wizard(
+        browser="edge",
+        auto_yes=False,
+        dry_run=False,
+        input_fn=lambda _: "n",
+        open_url_fn=lambda u: opened.append(u) or True,
+    )
+    assert res_declined["consented"] is False
+    assert opened == []
+
+    # With consent + dry-run, official ScriptCat link and MV3 switch steps print cleanly
+    res_dry = mod_wizard.run_wizard(
+        browser="edge",
+        auto_yes=True,
+        dry_run=True,
+        open_url_fn=lambda u: opened.append(u) or True,
+    )
+    out = capsys.readouterr().out
+    assert res_dry["consented"] is True
+    assert opened == []
+    assert "scriptcat.org" in out
+    assert "允许运行用户脚本" in out
 
 
 def test_clean_dedup_and_keyword_search(tmp_path: pathlib.Path) -> None:

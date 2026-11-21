@@ -5,9 +5,22 @@
 
 ---
 
-## 一、浏览器插件 / 脚本导出必做前置设置（踩坑最多一步）
+## 一、推荐导出扩展（ScriptCat 脚本猫）与浏览器开关必做设置
 
-很多网页版对话没有内置一键 Markdown/JSON 导出按钮，需要用浏览器导出扩展或用户脚本（如 Tampermonkey / 对话导出扩展）。**如果点导出没反应或读取不到页面/本地下载路径，90% 是没开扩展开关：**
+很多网页版对话没有内置一键 Markdown/JSON 导出按钮，推荐使用开源用户脚本管理器 **ScriptCat（脚本猫）** 配合对话导出脚本导出聊天原件。**如果装完扩展点导出没反应或读取不到页面/本地路径，90% 是没开 MV3 扩展开关：**
+
+### 0. 官方安全获取方式（经本人确认后再打开/下载）
+
+- **脚本猫官网 & 脚本中心**：https://scriptcat.org （使用文档：https://docs.scriptcat.org ）
+- **Microsoft Edge 加载项商店**：https://microsoftedge.microsoft.com/addons/detail/liilgpjgabokdklappibcjfablkpcekh
+- **Google Chrome 扩展商店**：https://chromewebstore.google.com/detail/hompjdfbfoggjbeebconmlijpelpfapo
+- **GitHub 开源发布页**：https://github.com/scriptscat/scriptcat/releases
+
+也可以直接运行仓库内置的交互式同意门禁向导，确认后自动为你打开官方商店页或拉取开源压缩包并打印开关自检清单：
+```bash
+# 先同意确认，再按指引跳转安装（支持 --browser edge|chrome|site 或 --download-release）
+python -X utf8 scripts/00_export_wizard.py --browser edge
+```
 
 ### 操作步骤（Chrome / Edge 通用）
 
@@ -15,7 +28,7 @@
    - Chrome：`chrome://extensions`
    - Edge：`edge://extensions`
 2. 打开右上角 **「开发者模式（Developer Mode）」** 开关。
-3. 找到你要使用的导出扩展或脚本管理器（例如 Tampermonkey / AI Chat Exporter），点击卡片右下方的 **「扩展详细信息 / 详情（Details）」**。
+3. 找到已安装的 **「脚本猫（ScriptCat）」**，点击卡片右下方的 **「扩展详细信息 / 详情（Details）」**。
 4. 进入详情页后，向下滚动并**确认打开以下关键开关**：
    - ✅ **「允许运行用户脚本（Allow User Scripts）」**（新版浏览器 MV3 强制要求手动开启，否则脚本完全不触发）
    - ✅ **「允许访问文件网址（Allow access to file URLs）」**（如需导出本地预览或读取本地辅助脚本）
