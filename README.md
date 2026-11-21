@@ -1,0 +1,79 @@
+# AI Onboarding Kit · 跨平台 AI 入职说明书全流程开源包
+
+> 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。  
+> 适用于 **任何本地 Agent**（Antigravity / Claude Code / Codex / Cursor / Hermes）以及 **网页端对话模型**（豆包 / DeepSeek / ChatGPT / Kimi）。
+
+[![CI](https://img.shields.io/badge/CI-pytest%20%2B%204--way%20demo-black)](#四三分钟现场演示真实可跑)
+[![License: MIT](https://img.shields.io/badge/License-MIT-gray)](LICENSE)
+
+---
+
+## 一、为什么常有人疑惑“到底是 5 份还是 6 份”？
+
+```text
+整套说明书 = 1 份 AI 总规矩 + 5 份个人核心档案（共 6 份文件）
+  ├── AGENTS.md                 ← 给 AI 看的合作站位、防瞎编底线与工作协议
+  └── 5 份个人核心档案（00~04）
+        ├── 00-总入口索引.md    ← 读取顺序 + 外部知识库指向
+        ├── 01-身份与当前主线.md ← 稳定个人事实 + 当前专注主线 + 彻底放弃项
+        ├── 02-核心判断准则.md   ← 遇事怎么取舍（全包最核心的一份）
+        ├── 03-硬规则与表达黑话.md ← 说话习惯 + 常见别名/语音口误词典
+        └── 04-正反例避坑账.md   ← 试过有效的正例 + 必拦截的真实踩坑反例
+```
+
+> 使用网页版 AI（只支持单框系统提示词）时，`AGENTS.md` 常贴入系统设定，正文档案则是那 `5` 份；放到本地 Agent 仓库里完整加载则是 **6 份文件**。
+
+---
+
+## 二、完整四步落地流水线
+
+```text
+[1. 访谈立底盘]        [2. 多平台原件导出]       [3. 去重与四路匹配回填]      [4. 校验并跨端挂载]
+  skills/               docs/02-...md            scripts/01 + 02              templates/ + 03_validate
+  + prompts/01          ⚠️开扩展开发者模式         关键词+向量+去均值聚类        输出可直接交给任何 AI
+  先人工拍板基准坐标 ──▶ 原文只读存 raw/      ──▶ +主宾/否定防误报抽样核对 ──▶ 挂载使用、持续微调
+```
+
+### Stage 1：结构化访谈立底盘（先人拍板，再查旧账）
+- **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，每次 3 个选择题，4~5 轮生成初稿。
+- **网页端用户**：复制 [prompts/01_web_ai_interviewer.md](prompts/01_web_ai_interviewer.md) 里的 10 行提示词直接发给豆包 / DeepSeek。
+
+### Stage 2：多平台聊天记录导出（含浏览器插件开关避坑）
+详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)。  
+**⚠️ 浏览器扩展/脚本导出最容易卡住的一步**：
+1. 打开浏览器扩展管理页（`chrome://extensions` 或 `edge://extensions`）→ 打开右上角 **「开发者模式」**；
+2. 点击导出扩展/脚本管理器的 **「扩展详细信息 / 详情」**；
+3. 打开 **「允许运行用户脚本（Allow User Scripts）」** 与 **「允许访问文件网址」** 开关，返回聊天页强刷即可导出原件进 `raw/`（只读不动，绝不提前让大模型写摘要覆盖原文）。
+
+### Stage 3：多 Agent 清洗 + 四路匹配技术（不靠瞎总结）
+1. **精准关键词直查**：SQLite `FTS5` trigram 倒排冷库（短词自动回退 `LIKE` 查精确原话）。
+2. **向量语义相似度**：500 字滑窗 / 80 字重叠切块后编码（L2 归一化原空间 `rec_raw`），长对话尾段零截断（默认纯 Python 标准库即跑；可选 `--use-fastembed` 接入 `BAAI/bge-small-zh-v1.5`）。
+3. **去均值余弦聚簇**：`L2(v - mu)` 消除语义偏心聚集（anisotropy），拆清过去把时间花在了哪些话题上。
+4. **跨簇模式磁铁 + 防误报门禁**：回原空间全盘扫描重复踩坑，自动拦截**主宾反转**（“我没听懂” vs “你没理解我”）与**否定词钝感**（“先别做” vs “直接做”），按分层抽样导出带 `[REC-xxxx]` 原文编号的 `backfill_candidates.md` 供人核实回填。
+
+---
+
+## 三、三分钟现场演示（零依赖、直接可跑）
+
+仓库自带一套完全虚构脱敏的示例数据 [examples/sample_raw/](examples/sample_raw/)，在根目录直接运行：
+
+```bash
+# 1. 清洗去重 + 建立 SQLite FTS5 冷库
+python -X utf8 scripts/01_clean_and_index.py --raw examples/sample_raw --db work/unified_index.db --query 记错
+
+# 2. 运行四路匹配 + 主宾/否定门禁过滤，产出人工回填清单
+python -X utf8 scripts/02_four_way_match.py --db work/unified_index.db --out work/backfill_candidates.md
+
+# 3. 校验空白模板结构（制作完自己的版本后加 --strict 检查是否留有未填占位符）
+python -X utf8 scripts/03_validate_kit.py --target templates
+
+# 4. 跑全套单元测试
+python -m pytest -v
+```
+
+---
+
+## 四、给其他 AI / Agent 使用本仓库的接入方式
+
+- **仓库自带工程规范**：根目录已按 [AGENTS.md](AGENTS.md)、[GLOSSARY.md](GLOSSARY.md)、[docs/adr/](docs/adr/) 与 `.scratch/` 约定配齐。
+- **任意本地 Agent 接管**：告诉它：“请读取仓库根目录的 `AGENTS.md` 与 `skills/onboarding-interviewer/SKILL.md`，带我跑完个人入职说明书建档、清洗并运行 `03_validate_kit.py` 验收。”

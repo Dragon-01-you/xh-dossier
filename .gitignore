@@ -1,0 +1,18 @@
+# User private data (never commit raw chat logs or built local DBs)
+raw/
+work/
+my-onboarding/
+*.db
+*.db-shm
+*.db-wal
+*.npy
+
+# Python & IDE caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+Thumbs.db
