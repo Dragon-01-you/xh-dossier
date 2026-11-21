@@ -3,17 +3,16 @@
 
 from __future__ import annotations
 
-import importlib.util
+import json
 import pathlib
 import sys
+from importlib import import_module
 
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
-
-from importlib import import_module
 
 mod_clean = import_module("01_clean_and_index")
 mod_match = import_module("02_four_way_match")
@@ -24,7 +23,6 @@ def test_clean_dedup_and_keyword_search(tmp_path: pathlib.Path) -> None:
     db_path = tmp_path / "cold.db"
     stats = mod_clean.clean_and_index(REPO_ROOT / "examples" / "sample_raw", db_path)
 
-    # sample_raw deliberately includes 1 exact duplicate across json & md
     assert stats["total_raw"] >= 8
     assert stats["dedup_skipped"] >= 1
     assert stats["indexed"] == stats["total_raw"] - stats["dedup_skipped"]
@@ -33,10 +31,69 @@ def test_clean_dedup_and_keyword_search(tmp_path: pathlib.Path) -> None:
     long_hits = mod_clean.search_keyword(db_path, "验收标准")
     assert len(long_hits) >= 2
 
-    # LIKE fallback (< 3 chars)
+    # Escaped SQL LIKE fallback (< 3 chars): "%" must match only literal "10%", not act as wildcard for all rows
     short_hits = mod_clean.search_keyword(db_path, "记错")
     assert len(short_hits) >= 1
     assert any("REC-" in h["rec_id"] for h in short_hits)
+    pct_hits = mod_clean.search_keyword(db_path, "%")
+    assert len(pct_hits) == 1 and "10%" in pct_hits[0]["content"]
+    assert mod_clean.search_keyword(db_path, "%%") == []
+    assert mod_clean.search_keyword(db_path, "_") == []
+
+
+def test_clean_supports_jsonl_chatgpt_mapping_and_skips_empty_md_headers(tmp_path: pathlib.Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+
+    # Local CLI .jsonl + broken line tolerance
+    (raw / "cli.jsonl").write_text(
+        json.dumps({"role": "user", "content": "jsonl里的第一条验收记录", "timestamp": "2026-11-01"}, ensure_ascii=False)
+        + "\n{broken json}\n",
+        encoding="utf-8",
+    )
+
+    # ChatGPT official `mapping` node export with list content parts
+    (raw / "chatgpt.json").write_text(
+        json.dumps(
+            [
+                {
+                    "created_at": "2026-11-02",
+                    "mapping": {
+                        "n1": {
+                            "message": {
+                                "author": {"role": "user"},
+                                "content": {"parts": ["ChatGPT导出树里的结构化提问"]},
+                            }
+                        }
+                    },
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    # Markdown with empty heading-only section and multi-turn conversation
+    (raw / "turns.md").write_text(
+        "## 空标题不入库\n\n## 2026-11-03 真实双轮对话\nUser: 提问第一句需要核查\nAssistant: 回答第二句已确认",
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "mix.db"
+    stats = mod_clean.clean_and_index(raw, db_path)
+    assert stats["indexed"] == 4
+    assert mod_clean.search_keyword(db_path, "空标题不入库") == []
+    assert len(mod_clean.search_keyword(db_path, "jsonl")) == 1
+    assert len(mod_clean.search_keyword(db_path, "ChatGPT导出树")) == 1
+
+
+def test_missing_db_raises_without_creating_empty_file(tmp_path: pathlib.Path) -> None:
+    missing = tmp_path / "does_not_exist.db"
+    with pytest.raises(FileNotFoundError):
+        mod_clean.search_keyword(missing, "验收")
+    with pytest.raises(FileNotFoundError):
+        mod_match.run_four_way_pipeline(missing, ["验收"])
+    assert not missing.exists()
 
 
 def test_chunk_text_preserves_long_tails() -> None:
@@ -75,6 +132,9 @@ def test_guardrails_block_subject_inversion_and_negation() -> None:
     assert not ok_neg
     assert "negation_marker" in reason_neg
 
+    ok_method_neg, _ = mod_match.apply_guardrails("先别直接定死方案，先拿小样本验一遍", "method_principle")
+    assert not ok_method_neg
+
 
 def test_end_to_end_four_way_pipeline(tmp_path: pathlib.Path) -> None:
     db_path = tmp_path / "demo.db"
@@ -91,18 +151,35 @@ def test_end_to_end_four_way_pipeline(tmp_path: pathlib.Path) -> None:
     assert "[待确认]" in md
 
 
-def test_validate_kit_templates_and_strict_mode(tmp_path: pathlib.Path) -> None:
+def test_validate_kit_templates_placeholders_and_pii(tmp_path: pathlib.Path) -> None:
     ok_non_strict, _ = mod_val.validate_kit(REPO_ROOT / "templates", strict=False)
     assert ok_non_strict
 
     ok_strict_tpl, msgs_tpl = mod_val.validate_kit(REPO_ROOT / "templates", strict=True)
     assert not ok_strict_tpl
-    assert any("UNFILLED" in m for m in msgs_tpl)
+    assert sum("UNFILLED placeholders" in m for m in msgs_tpl) == 5
 
-    # Complete clean user kit passes strict mode
+    # Verify non-<填写...> placeholder variants are also caught in --strict mode
+    custom_kit = tmp_path / "half_done"
+    custom_kit.mkdir()
+    for fname in mod_val.REQUIRED_KIT_FILES:
+        (custom_kit / fname).write_text(f"# {fname}\n\n" + "正文占位样例" * 20, encoding="utf-8")
+    (custom_kit / "01-身份与当前主线.md").write_text(
+        "# 01\n\n" + "稳定事实内容够长检查通过。" * 6 + "\n- <一句话写清你的底层动机>", encoding="utf-8"
+    )
+    ok_half, msgs_half = mod_val.validate_kit(custom_kit, strict=True)
+    assert not ok_half
+    assert any("UNFILLED" in m for m in msgs_half)
+
+    # Complete clean user kit passes strict mode, but local user path triggers PII warning
     clean_kit = tmp_path / "clean_kit"
     clean_kit.mkdir()
     for fname in mod_val.REQUIRED_KIT_FILES:
         (clean_kit / fname).write_text(f"# {fname}\n\n" + "这是经过核实并亲口拍板的真实个人核心记录条目，用于测试验证完整性。" * 3, encoding="utf-8")
     ok_clean, msgs_clean = mod_val.validate_kit(clean_kit, strict=True)
     assert ok_clean, msgs_clean
+
+    (clean_kit / "00-总入口索引.md").write_text("# 00\n\n" + "正文记录" * 30 + "\n路径: C:\\Users\\Alice\\secret", encoding="utf-8")
+    ok_leak, msgs_leak = mod_val.validate_kit(clean_kit, strict=True)
+    assert not ok_leak
+    assert any("PII_OR_SECRET_RISK" in m for m in msgs_leak)

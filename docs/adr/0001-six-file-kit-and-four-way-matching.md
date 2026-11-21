@@ -17,7 +17,7 @@ When migrating across dozens of web and local AI tools, users commonly face two 
    Both counts ("5 personal files" vs "6 total files including `AGENTS.md`") are explained explicitly so users of either web prompts (`AGENTS.md` pasted into system instructions) or local Agent CLI tools (`AGENTS.md` auto-loaded from repo/root) stay aligned.
 2. **Use a 4-way deterministic + semantic matching pipeline before human backfill**:
    - Step 1 (`01_clean_and_index.py`): clean noise, MD5 deduplicate, build read-only SQLite `FTS5` trigram cold index (`< 3` chars fallback to `LIKE`).
-   - Step 2 (`02_four_way_match.py`): combine (1) keyword exact search, (2) chunked vector retrieval (`size=500, overlap=80`), (3) mean-centered cosine clustering (`L2(v - mu)`), and (4) cross-cluster pattern mining guarded against Subject-Object Inversion and Negation Blindness, outputting traceable `[REC:id]` evidence for user backfill (`[待确认]` until user approves).
+   - Step 2 (`02_four_way_match.py`): combine (1) keyword exact search, (2) chunked vector retrieval (`size=500, overlap=80`), (3) mean-centered cosine clustering (`L2(v - mu)`), and (4) cross-cluster pattern mining guarded against Subject-Object Inversion and Negation Blindness, outputting traceable `[REC-xxxx]` evidence for user backfill (`[待确认]` until user approves).
 
 ## Consequences
 

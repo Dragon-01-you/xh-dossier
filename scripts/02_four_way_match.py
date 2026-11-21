@@ -12,14 +12,12 @@ import re
 import sqlite3
 import sys
 from collections import Counter, defaultdict
+from importlib import import_module
 from typing import Iterable
 
-# Reuse Stage 3.1 exact keyword search helper
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
-
-from importlib import import_module
 
 _mod01 = import_module("01_clean_and_index")
 search_keyword = _mod01.search_keyword
@@ -82,7 +80,6 @@ def build_tfidf_vectors(texts: list[str], extra_queries: list[str] | None = None
     n_docs = max(1, len(texts))
     idf = {k: math.log((n_docs + 1) / (df + 1)) + 1.0 for k, df in all_df.items()}
 
-    # Ensure query tokens receive reasonable fallback weight even if rare
     if extra_queries:
         for q in extra_queries:
             for k in _char_ngrams(q):
@@ -111,7 +108,7 @@ def vectorize_query(query: str, idf: dict[str, float]) -> dict[str, float]:
 
 
 def mean_center_and_normalize(vectors: list[dict[str, float]]) -> tuple[list[dict[str, float]], dict[str, float]]:
-    """Subtract dataset centroid mu to remove anisotropy before density clustering."""
+    """Subtract dataset centroid mu to remove anisotropy before density clustering (keeps significant sparse entries)."""
     if not vectors:
         return [], {}
     n = len(vectors)
@@ -119,19 +116,35 @@ def mean_center_and_normalize(vectors: list[dict[str, float]]) -> tuple[list[dic
     for vec in vectors:
         for k, v in vec.items():
             mu[k] += v / n
-    mu_dict = dict(mu)
+    # Only propagate meaningful centroid weights to avoid O(N*V) dense noise on large corpora
+    mu_sig = {k: v for k, v in mu.items() if abs(v) > 1e-4}
+    mu_norm_sq = sum(v * v for v in mu_sig.values())
 
     centered: list[dict[str, float]] = []
-    all_keys = set(mu_dict.keys())
     for vec in vectors:
-        shifted = {k: vec.get(k, 0.0) - mu_dict[k] for k in all_keys}
-        centered.append(_l2_normalize_dict(shifted))
-    return centered, mu_dict
+        shifted: dict[str, float] = {}
+        # Norm of (v - mu) = sqrt(||v||^2 - 2<v, mu> + ||mu||^2) avoids scanning zero keys for norm
+        v_sq = sum(val * val for val in vec.values())
+        v_dot_mu = sum(val * mu_sig.get(k, 0.0) for k, val in vec.items())
+        denom = math.sqrt(max(0.0, v_sq - 2.0 * v_dot_mu + mu_norm_sq))
+        if denom <= 1e-12:
+            centered.append({})
+            continue
+        for k, val in vec.items():
+            diff = val - mu_sig.get(k, 0.0)
+            if abs(diff) > 1e-5:
+                shifted[k] = diff / denom
+        for k, mval in mu_sig.items():
+            if k not in vec and mval > 0.01:
+                shifted[k] = -mval / denom
+        centered.append(shifted)
+    return centered, dict(mu)
 
 
 def cluster_vectors(centered_vectors: list[dict[str, float]], sim_threshold: float = 0.25, min_cluster_size: int = 2) -> list[int]:
-    """Greedy cosine density clustering returning cluster id per record (-1 for singleton long tail)."""
+    """Greedy cosine density clustering using O(N * nnz) incremental centroid updates."""
     clusters: list[list[int]] = []
+    centroid_sums: list[dict[str, float]] = []
     centroids: list[dict[str, float]] = []
 
     for idx, vec in enumerate(centered_vectors):
@@ -144,15 +157,13 @@ def cluster_vectors(centered_vectors: list[dict[str, float]], sim_threshold: flo
                 best_c = c_idx
         if best_c >= 0:
             clusters[best_c].append(idx)
-            # Recompute cluster mean
-            c_members = clusters[best_c]
-            merged: dict[str, float] = defaultdict(float)
-            for m_i in c_members:
-                for k, val in centered_vectors[m_i].items():
-                    merged[k] += val / len(c_members)
-            centroids[best_c] = _l2_normalize_dict(dict(merged))
+            csum = centroid_sums[best_c]
+            for k, val in vec.items():
+                csum[k] = csum.get(k, 0.0) + val
+            centroids[best_c] = _l2_normalize_dict(csum)
         else:
             clusters.append([idx])
+            centroid_sums.append(dict(vec))
             centroids.append(vec)
 
     labels = [-1] * len(centered_vectors)
@@ -174,7 +185,7 @@ def apply_guardrails(content: str, pattern_kind: str) -> tuple[bool, str]:
         if has_user_self and not has_ai_miss:
             return False, "filtered:subject_object_inversion(user_did_not_understand)"
 
-    if pattern_kind == "affirmative_action":
+    if pattern_kind in {"affirmative_action", "method_principle"}:
         if any(neg in lowered for neg in NEGATION_MARKERS):
             return False, "filtered:negation_marker_present"
 
@@ -209,6 +220,9 @@ def run_four_way_pipeline(
     pattern_threshold: float = 0.16,
 ) -> dict:
     """Execute all 4 matching ways on records in db_path and return structured evidence for backfill."""
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Database not found: {db_path}")
+
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     try:
@@ -220,14 +234,9 @@ def run_four_way_pipeline(
         return {"records": 0, "keyword_hits": {}, "clusters": {}, "pattern_hits": {}}
 
     texts = [r["content"] for r in rows]
-    # Way 1: Exact keyword search
     kw_results = {kw: search_keyword(db_path, kw, limit=15) for kw in keywords}
 
-    # Way 2: Chunk-averaged un-centered vectors (rec_raw)
     flat_seeds = [s for _, _, seeds in DEFAULT_PATTERNS for s in seeds]
-    rec_raw: list[dict[str, float]]
-    seed_vecs: dict[str, dict[str, float]] = {}
-
     if use_fastembed:
         fe = _encode_with_fastembed(texts, flat_seeds)
         if fe is not None:
@@ -240,7 +249,6 @@ def run_four_way_pipeline(
         rec_raw, idf = build_tfidf_vectors(texts, flat_seeds)
         seed_vecs = {s: vectorize_query(s, idf) for s in flat_seeds}
 
-    # Way 3: Mean-centered vectors for clustering (anisotropy removal)
     rec_centered, _mu = mean_center_and_normalize(rec_raw)
     eff_cluster_th = (0.02 if len(rows) < 25 else 0.20) if cluster_threshold is None else cluster_threshold
     labels = cluster_vectors(rec_centered, sim_threshold=eff_cluster_th, min_cluster_size=2)
@@ -248,7 +256,6 @@ def run_four_way_pipeline(
     for row, cid in zip(rows, labels):
         cluster_map[cid].append(row)
 
-    # Way 4: Cross-cluster pattern magnet in un-centered rec_raw + guardrails
     pattern_hits: dict[str, dict] = {}
     for kind, title, seeds in DEFAULT_PATTERNS:
         passed = []
@@ -271,15 +278,16 @@ def run_four_way_pipeline(
             else:
                 filtered.append(item)
         passed.sort(key=lambda x: x["score"], reverse=True)
-        # Stratified sample: top, mid, borderline
         sampled = []
         if passed:
             indices = sorted({0, len(passed) // 2, len(passed) - 1})
             sampled = [passed[i] for i in indices]
+        clusters_spanned = sorted({item["cluster"] for item in passed})
         pattern_hits[title] = {
             "kind": kind,
             "passed_count": len(passed),
             "filtered_count": len(filtered),
+            "clusters_spanned": clusters_spanned,
             "sampled": sampled,
             "filtered": filtered[:5],
         }
@@ -314,7 +322,10 @@ def render_backfill_markdown(report: dict) -> str:
 
     lines.extend(["", "## 三、Way 2 & Way 4 · 跨簇语义模式挖掘 + 主宾/否定防误报拦截", ""])
     for title, info in report["pattern_hits"].items():
-        lines.append(f"### 模式：`{title}`（通过 `{info['passed_count']}` 条 ｜ 门禁拦截 `{info['filtered_count']}` 条误报）")
+        span = len(info.get("clusters_spanned", []))
+        lines.append(
+            f"### 模式：`{title}`（跨越 `{span}` 个簇/长尾 ｜ 通过 `{info['passed_count']}` 条 ｜ 门禁拦截 `{info['filtered_count']}` 条误报）"
+        )
         for s in info["sampled"]:
             lines.append(f"- `[待确认]` `[{s['rec_id']} | sim={s['score']} | cluster={s['cluster']}]` {s['excerpt']}")
         for f in info["filtered"]:

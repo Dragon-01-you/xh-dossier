@@ -3,7 +3,7 @@
 > 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。  
 > 适用于 **任何本地 Agent**（Antigravity / Claude Code / Codex / Cursor / Hermes）以及 **网页端对话模型**（豆包 / DeepSeek / ChatGPT / Kimi）。
 
-[![CI](https://img.shields.io/badge/CI-pytest%20%2B%204--way%20demo-black)](#四三分钟现场演示真实可跑)
+[![CI](https://img.shields.io/badge/CI-pytest%20%2B%204--way%20demo-black)](#三三分钟现场演示零依赖直接可跑)
 [![License: MIT](https://img.shields.io/badge/License-MIT-gray)](LICENSE)
 
 ---
@@ -50,6 +50,9 @@
 2. **向量语义相似度**：500 字滑窗 / 80 字重叠切块后编码（L2 归一化原空间 `rec_raw`），长对话尾段零截断（默认纯 Python 标准库即跑；可选 `--use-fastembed` 接入 `BAAI/bge-small-zh-v1.5`）。
 3. **去均值余弦聚簇**：`L2(v - mu)` 消除语义偏心聚集（anisotropy），拆清过去把时间花在了哪些话题上。
 4. **跨簇模式磁铁 + 防误报门禁**：回原空间全盘扫描重复踩坑，自动拦截**主宾反转**（“我没听懂” vs “你没理解我”）与**否定词钝感**（“先别做” vs “直接做”），按分层抽样导出带 `[REC-xxxx]` 原文编号的 `backfill_candidates.md` 供人核实回填。
+
+### Stage 4：6 件套验收与跨端挂载
+- 使用 [templates/](templates/) 中的 6 份空白模板（1 份 `AGENTS.md` + 5 份个人档案 `00~04`）定稿自己的手册，并用 `python -X utf8 scripts/03_validate_kit.py --target <目录> --strict` 检查是否还有未填占位符、空话或本地路径隐私泄露。
 
 ---
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Stage 3.1: Clean raw exported multi-platform chat logs, deduplicate by MD5, and build SQLite FTS5 cold index."""
+"""Stage 3.1: Clean raw exported multi-platform chat logs (.json/.jsonl/.md/.txt), deduplicate by MD5, and build SQLite FTS5 cold index."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import pathlib
 import re
 import sqlite3
@@ -24,15 +23,34 @@ def clean_text(raw: str) -> str:
     return text.strip()
 
 
-def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
-    data: Any = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+def _flatten_content(val: Any) -> str:
+    """Safely normalize string, parts list, or content dicts into plain text without repr(dict) clutter."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, list):
+        parts = [_flatten_content(item) for item in val]
+        return "\n".join(p for p in parts if p)
+    if isinstance(val, dict):
+        if "parts" in val:
+            return _flatten_content(val["parts"])
+        for key in ("text", "content", "value", "body"):
+            if key in val:
+                return _flatten_content(val[key])
+        return ""
+    return str(val)
+
+
+def _records_from_json_obj(data: Any, source_name: str) -> list[dict[str, str]]:
+    """Extract normalized records from ChatGPT mapping exports, conversation lists, or flat message objects."""
     rows: list[dict[str, str]] = []
 
     if isinstance(data, dict):
         if "conversations" in data and isinstance(data["conversations"], list):
-            items = data["conversations"]
+            items: list[Any] = data["conversations"]
         elif "messages" in data and isinstance(data["messages"], list):
-            items = [{"title": data.get("title", path.stem), "messages": data["messages"]}]
+            items = [{"created_at": data.get("created_at") or data.get("timestamp"), "messages": data["messages"]}]
         else:
             items = [data]
     elif isinstance(data, list):
@@ -40,29 +58,52 @@ def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
     else:
         return rows
 
-    for idx, item in enumerate(items):
+    for item in items:
         if not isinstance(item, dict):
             continue
-        ts = str(item.get("created_at") or item.get("timestamp") or item.get("date") or "unknown")
+        ts = str(item.get("created_at") or item.get("timestamp") or item.get("create_time") or item.get("date") or "unknown")
+
+        # Handle ChatGPT official `mapping` node tree format
+        if isinstance(item.get("mapping"), dict):
+            for node in item["mapping"].values():
+                if not isinstance(node, dict):
+                    continue
+                msg = node.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                author = msg.get("author") if isinstance(msg.get("author"), dict) else {}
+                role = str(author.get("role") or msg.get("role") or "user")
+                if role == "system":
+                    continue
+                body = clean_text(_flatten_content(msg.get("content")))
+                if len(body) >= 4:
+                    rows.append({
+                        "source_file": source_name,
+                        "created_at": str(msg.get("create_time") or ts),
+                        "role": role,
+                        "content": body,
+                    })
+            continue
+
         msgs = item.get("messages")
         if isinstance(msgs, list):
-            for m_idx, m in enumerate(msgs):
+            for m in msgs:
                 if not isinstance(m, dict):
                     continue
-                body = clean_text(str(m.get("content") or m.get("text") or ""))
-                if len(body) < 4:
-                    continue
-                rows.append({
-                    "source_file": path.name,
-                    "created_at": str(m.get("created_at") or m.get("timestamp") or ts),
-                    "role": str(m.get("role") or "user"),
-                    "content": body,
-                })
+                body = clean_text(_flatten_content(m.get("content") if "content" in m else m.get("text")))
+                if len(body) >= 4:
+                    rows.append({
+                        "source_file": source_name,
+                        "created_at": str(m.get("created_at") or m.get("timestamp") or ts),
+                        "role": str(m.get("role") or "user"),
+                        "content": body,
+                    })
         else:
-            body = clean_text(str(item.get("content") or item.get("text") or item.get("body") or ""))
+            raw_body = item.get("content") if "content" in item else (item.get("text") if "text" in item else item.get("body"))
+            body = clean_text(_flatten_content(raw_body))
             if len(body) >= 4:
                 rows.append({
-                    "source_file": path.name,
+                    "source_file": source_name,
                     "created_at": ts,
                     "role": str(item.get("role") or "user"),
                     "content": body,
@@ -70,41 +111,73 @@ def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
     return rows
 
 
+def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"WARN: skipped malformed JSON {path.name}: {exc}")
+        return []
+    return _records_from_json_obj(data, path.name)
+
+
+def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"WARN: skipped malformed JSONL line {path.name}:{line_no}: {exc}")
+            continue
+        rows.extend(_records_from_json_obj(obj, path.name))
+    return rows
+
+
 def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
     text = path.read_text(encoding="utf-8", errors="replace")
-    # Split on markdown section headers (`## ` or `### `) so multi-turn logs become discrete records
     sections = re.split(r"(?m)^#{2,3}\s+", text)
     rows: list[dict[str, str]] = []
+    turn_re = re.compile(r"(?mi)^(?=(?:user|assistant|ai|助手|用户)\s*[:：])")
+
     for idx, section in enumerate(sections):
         raw_block = section.strip()
         if not raw_block:
             continue
         date_m = re.search(r"(\d{4}-\d{2}-\d{2})", raw_block)
         ts = date_m.group(1) if date_m else "unknown"
-        # Drop the heading title line on sectioned markdown/txt exports
-        if idx > 0 and "\n" in raw_block:
+        if idx > 0:
+            # Skip heading-only sections with no body lines beneath them
+            if "\n" not in raw_block:
+                continue
             _, raw_block = raw_block.split("\n", 1)
-        body = clean_text(raw_block)
-        role_m = re.match(r"^(user|assistant|ai|助手|用户)\s*[:：]\s*", body, re.IGNORECASE)
-        role = "user"
-        if role_m:
-            lbl = role_m.group(1).lower()
-            role = "assistant" if lbl in {"assistant", "ai", "助手"} else "user"
-            body = body[role_m.end() :].strip()
-        if len(body) < 4:
-            continue
-        rows.append({
-            "source_file": path.name,
-            "created_at": ts,
-            "role": role,
-            "content": body,
-        })
+
+        turns = [t.strip() for t in turn_re.split(raw_block) if t.strip()]
+        for turn in turns:
+            body = clean_text(turn)
+            role_m = re.match(r"^(user|assistant|ai|助手|用户)\s*[:：]\s*", body, re.IGNORECASE)
+            role = "user"
+            if role_m:
+                lbl = role_m.group(1).lower()
+                role = "assistant" if lbl in {"assistant", "ai", "助手"} else "user"
+                body = body[role_m.end() :].strip()
+            if len(body) >= 4:
+                rows.append({
+                    "source_file": path.name,
+                    "created_at": ts,
+                    "role": role,
+                    "content": body,
+                })
     return rows
 
 
 def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, int]:
-    """Scan raw_dir (.json/.md/.txt), deduplicate by full-text MD5, and store into SQLite FTS5 cold DB."""
-    if not raw_dir.exists():
+    """Scan raw_dir (.json/.jsonl/.md/.txt), deduplicate by full-text MD5, and store into SQLite FTS5 cold DB."""
+    if not raw_dir.is_dir():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +211,8 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
             ext = path.suffix.lower()
             if ext == ".json":
                 extracted = _extract_from_json(path)
+            elif ext == ".jsonl":
+                extracted = _extract_from_jsonl(path)
             elif ext in {".md", ".txt"}:
                 extracted = _extract_from_text(path)
             else:
@@ -165,8 +240,15 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
     return {"total_raw": total_raw, "dedup_skipped": dedup_skipped, "indexed": indexed}
 
 
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[dict[str, str]]:
-    """Run exact keyword search using FTS5 trigram (>=3 chars) with automatic LIKE fallback (<3 chars)."""
+    """Run exact keyword search using FTS5 trigram (>=3 chars) with escaped SQL LIKE fallback (<3 chars)."""
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Database not found: {db_path}")
+
     q = query.strip()
     if not q:
         return []
@@ -187,14 +269,15 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
                 (safe_q, limit),
             ).fetchall()
         else:
+            escaped = _escape_like(q)
             rows = con.execute(
                 """
                 SELECT rec_id, source_file, created_at, role, content
                 FROM records
-                WHERE content LIKE ?
+                WHERE content LIKE ? ESCAPE '\\'
                 LIMIT ?
                 """,
-                (f"%{q}%", limit),
+                (f"%{escaped}%", limit),
             ).fetchall()
         return [dict(row) for row in rows]
     finally:
