@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sqlite3
 import sys
 from importlib import import_module
 
@@ -417,3 +418,30 @@ def test_match_cli_missing_db_reports_human_error_without_traceback(
     assert "Traceback" not in combined
     assert not missing_db.exists(), "CLI must not create an empty DB file on failure"
     assert not out_path.exists(), "CLI must not write a report on failure"
+
+
+def test_match_cli_permission_denied_reports_human_error(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A locked/read-only existing DB must yield PERMISSION_DENIED + exit 2."""
+    db_path = tmp_path / "locked.db"
+    db_path.write_bytes(b"not a real db but exists")
+    out_path = tmp_path / "report.md"
+    monkeypatch.setattr(
+        mod_match, "run_four_way_pipeline",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("unable to open database file")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["02_four_way_match.py", "--db", str(db_path), "--out", str(out_path)],
+    )
+    assert mod_match.main() == 2
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "PERMISSION_DENIED" in combined
+    assert "unable to open database file" in combined
+    assert "Traceback" not in combined
+    assert not out_path.exists()
