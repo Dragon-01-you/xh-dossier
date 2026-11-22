@@ -347,8 +347,7 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
             safe_q = '"' + q.replace('"', '""') + '"'
             rows = con.execute(
                 """
-                SELECT r.rec_id, r.source_file, r.created_at, r.role, r.content,
-                       r.event_date, r.date_kind
+                SELECT r.*
                 FROM records_fts f
                 JOIN records r ON r.rec_id = f.rec_id
                 WHERE records_fts MATCH ?
@@ -360,8 +359,7 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
             escaped = _escape_like(q)
             rows = con.execute(
                 """
-                SELECT rec_id, source_file, created_at, role, content,
-                       event_date, date_kind
+                SELECT *
                 FROM records
                 WHERE content LIKE ? ESCAPE '\\'
                 LIMIT ?

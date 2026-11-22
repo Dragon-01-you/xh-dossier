@@ -37,19 +37,29 @@ _STRONG_RETRO = [
 # Ambiguous markers: "记得/之前/当时/那会" can be imperative or vague.
 # They only count as retrospective when paired with a past cue in the SAME clause.
 _AMBIGUOUS_RETRO = [r"记得", r"之前", r"当时", r"那会"]
-_PAST_CUES = [r"那", r"过", r"了", r"曾", r"以前", r"之前", r"当初", r"当时", r"回", r"上次", r"去年", r"上周"]
+_PAST_CUES = [r"那", r"过", r"了", r"曾", r"当初", r"当时", r"回", r"上次", r"去年", r"上周"]
 
 # Explicit "now" markers: the event is at mention time; these WIN over retro cues.
 # "现在" alone is too broad ("现在的目录"/"现在为你安装" are state/instructions),
 # so it only counts with a completion/progress cue in the same clause.
-NOW_MARKERS = ["今天", "刚才", "刚刚", "这周", "本周", "正在"]
-_NOW_CLAUSE_RE = re.compile(r"现在.*(?:了|终于|已经|开始|正在|刚)|(?:终于|已经|开始|正在|刚).*现在")
+NOW_MARKERS = ["今天", "刚才", "刚刚", "这周", "本周"]
+_FIRST_PERSON_RE = re.compile(r"(?:我|本人|我们|咱们)")
+# "现在" alone is too broad. Only accept a completion/progress cue adjacent to it,
+# or a first-person clause ("我现在..." / "今天我...").
+_NOW_COMPLETION_RE = re.compile(
+    r"现在(?:终于|已经|正在|刚|才|马上|立刻)|(?:终于|已经|刚|才)\s*现在"
+)
+_PROGRESSIVE_RE = re.compile(
+    r"(?:我|本人|我们|咱们).{0,10}(?:正在|正)(?:做|写|弄|改|跑|装|学|开发|搭|设计|整理|处理|推进|调试|部署|修复|实现|排|建|看|读|试)"
+)
 
 
 def _has_now_marker(clause: str) -> bool:
-    if any(now in clause for now in NOW_MARKERS):
+    if any(now in clause for now in NOW_MARKERS) and _FIRST_PERSON_RE.search(clause):
         return True
-    return bool(_NOW_CLAUSE_RE.search(clause))
+    if _NOW_COMPLETION_RE.search(clause):
+        return True
+    return bool(_PROGRESSIVE_RE.search(clause))
 
 # An absolute date must have PAIRED delimiters: 2025-09, 2025年09月, 2025/09/01.
 # This avoids slicing a version number like "2025-123" into 2025-12-03.
