@@ -352,6 +352,15 @@ def main() -> int:
         print(f"DB_NOT_FOUND: 找不到数据库文件 {args.db}。")
         print("请先运行 scripts/01_clean_and_index.py 生成统一索引库，并确认 raw/ 里确实有导出的对话文件，不要把堆栈当成失败原因。")
         return 2
+    except (sqlite3.OperationalError, PermissionError) as exc:
+        # A DB can exist but be locked by another process, read-only, or owned by
+        # another user. That is not "missing"; say what to do instead of dumping a
+        # traceback. The function layer keeps raising the original exception.
+        detail = str(exc)
+        print(f"PERMISSION_DENIED: 数据库打不开或没有读写权限 {args.db}。")
+        print(f"底层原因：{detail}")
+        print("请关闭正在占用该库的进程（常见是另一个 01/02 还在跑），或把库复制到你有写权限的目录后重试。")
+        return 2
     if report["records"] == 0:
         print("FOUR_WAY_EMPTY: 数据库里没有可匹配的原文记录（records=0）。")
         print("请先运行 scripts/01_clean_and_index.py 并确认 raw/ 里确实有导出的对话文件，不要把空报告当成跑通。")
