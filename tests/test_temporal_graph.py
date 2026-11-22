@@ -28,7 +28,11 @@ mod06 = import_module("06_graph_index")
 mod07 = import_module("07_recall_time_graph")
 
 
-def _make_db(tmp_path: pathlib.Path, records: list[tuple[str, str, str, str]]) -> pathlib.Path:
+def _make_db(
+    tmp_path: pathlib.Path,
+    records: list[tuple[str, str, str, str]],
+    event_dates: dict[str, str] | None = None,
+) -> pathlib.Path:
     """Build a minimal legacy-style DB with only ``records`` + ``records_fts``."""
     db_path = tmp_path / "recall.db"
     con = sqlite3.connect(str(db_path))
@@ -48,6 +52,14 @@ def _make_db(tmp_path: pathlib.Path, records: list[tuple[str, str, str, str]]) -
             (rec_id, "f.md", date, role, content, digest),
         )
         con.execute("INSERT INTO records_fts (rec_id, content) VALUES (?, ?)", (rec_id, content))
+    if event_dates:
+        con.execute("ALTER TABLE records ADD COLUMN event_date TEXT")
+        con.execute("ALTER TABLE records ADD COLUMN date_kind TEXT")
+        for rec_id, event_date in event_dates.items():
+            con.execute(
+                "UPDATE records SET event_date=?, date_kind='stated' WHERE rec_id=?",
+                (event_date, rec_id),
+            )
     con.commit()
     con.close()
     return db_path
@@ -344,6 +356,21 @@ def test_graph_neighbors_one_hop_provenance_and_two_hop(tmp_path: pathlib.Path) 
     assert "FastAPI" in one_hop_objects
 
 
+def test_third_person_statement_is_not_attributed_to_self(tmp_path: pathlib.Path) -> None:
+    db = _make_db(
+        tmp_path,
+        [("R1", "2026-09-01", "user", "Python 使用 FastAPI 部署服务，这是第三方的事实描述")],
+    )
+    mod06.build_graph(db, lexicon=["Python", "FastAPI"], rebuild=True)
+    con = sqlite3.connect(str(db))
+    typed = con.execute(
+        "SELECT count(*) FROM relations WHERE relation IN "
+        "('LEARNS','USES','WORKS_AT','LIVES_IN','LIKES','RESPONSIBLE_FOR','PREPARES_FOR')"
+    ).fetchone()[0]
+    con.close()
+    assert typed == 0
+
+
 # --------------------------------------------------------------------------- #
 # 12. Graph edges honor the valid-time window under AS OF
 # --------------------------------------------------------------------------- #
@@ -385,3 +412,53 @@ def test_keyword_combined_with_temporal_filter(tmp_path: pathlib.Path) -> None:
     report = mod07.run_recall(db, since="2026-10-01", until="2026-10-31", keyword="验收")
     assert report["counts"]["keyword"] >= 1
     assert {r["rec_id"] for r in report["temporal"]} == {"R2"}
+
+
+# --------------------------------------------------------------------------- #
+# 14. #10 integration: event_date drives valid_from, created_at drives trans_from
+# --------------------------------------------------------------------------- #
+def test_backfill_uses_event_date_for_valid_time(tmp_path: pathlib.Path) -> None:
+    db = _make_db(
+        tmp_path,
+        [("R1", "2026-11-20", "user", "我去年秋天开始学习 Python")],
+        event_dates={"R1": "2025-10-01"},
+    )
+    mod05.backfill_from_records(db)
+    con = sqlite3.connect(str(db))
+    con.row_factory = sqlite3.Row
+    row = dict(con.execute("SELECT * FROM fact_validity WHERE fact_id='R1'").fetchone())
+    con.close()
+    assert row["valid_from"] == "2025-10-01"
+    assert row["trans_from"] == "2026-11-20"
+    assert row["valid_from"] != row["trans_from"]
+
+
+def test_graph_build_uses_event_date_for_edges(tmp_path: pathlib.Path) -> None:
+    db = _make_db(
+        tmp_path,
+        [("R1", "2026-11-20", "user", "我学习 Python 编程基础")],
+        event_dates={"R1": "2025-10-01"},
+    )
+    mod06.build_graph(db, lexicon=["Python"], rebuild=True)
+    con = sqlite3.connect(str(db))
+    row = con.execute("SELECT valid_from, trans_from FROM relations WHERE rec_id='R1'").fetchone()
+    con.close()
+    assert row[0] == "2025-10-01"
+    assert row[1] == "2026-11-20"
+
+
+# --------------------------------------------------------------------------- #
+# 15. No time / graph filter must not fabricate a full-table hit
+# --------------------------------------------------------------------------- #
+def test_run_recall_without_filters_returns_no_temporal_or_graph_rows(tmp_path: pathlib.Path) -> None:
+    db = _make_db(
+        tmp_path,
+        [("R1", "2026-09-01", "user", "我学习 Python 编程基础")],
+    )
+    mod06.build_graph(db, lexicon=["Python"], rebuild=True)
+    report = mod07.run_recall(db, keyword="Python")
+    assert report["temporal"] == []
+    assert report["graph"] == []
+    assert report["counts"]["temporal"] == 0
+    assert report["counts"]["graph"] == 0
+    assert report["counts"]["keyword"] >= 1
