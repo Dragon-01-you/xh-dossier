@@ -1,0 +1,136 @@
+# AGENT_START_HERE · 给任何零环境 Agent 的入口
+
+你只需要 Python 3.10+。核心路径没有第三方依赖；`pytest` 只在开发时用。
+
+## 0. 先体检（10 秒）
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py doctor
+```
+
+看到 `DOCTOR_OK` 再往下。`ERROR:` 必须解决；`WARN:` 可以先记录。
+
+## 1. 初始化工作区
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py init
+```
+
+会在 `work/` 建：
+
+- `raw/`：只读原始导出，别让模型改写
+- `interview/`：6 轮访谈原始回答
+- `kit/`：6 份档案草稿
+- `reports/`、`evidence/`
+
+## 2. 真实全流程（推荐顺序）
+
+```text
+S0 doctor
+S1 访谈 6 轮 → work/interview + work/kit
+S2 浏览器导出 → work/raw
+S3 ingest → work/unified_index.db
+S4 match → work/backfill_candidates.md
+S5 validate → work/kit
+S6 二层 backfill → 需要本人逐条签字
+S7 verify → 交付
+```
+
+每一步只做一步；做完给命令、退出码、关键输出、产物路径，再问“继续？”。
+
+### S1 访谈
+
+读 `skills/onboarding-interviewer/SKILL.md`，6 轮、每轮 3 题；不要替用户编答案。每轮把回答写进 `work/interview/round-N.md`，再生成 `work/kit/` 的 6 份草稿。
+
+### S2 导出
+
+优先看 `docs/02-multi-platform-export.md`：ScriptCat（引擎）+ AfterChat（工人），下载后用 `Ctrl+J` 核对落盘路径。
+
+如果目标 Agent **没有浏览器扩展权限**，用浏览器工具直接读当前会话 DOM：
+
+1. 打开已登录的对话页（豆包会话页等）；
+2. 让浏览器 Agent 读取消息行（豆包是 `.v_list_row`；有 `send-msg-bubble` 的是 User，否则 Assistant）；
+3. 按 AfterChat 兼容格式写 Markdown：
+
+```markdown
+## Metadata
+- **Source:** <url>
+- **Time:** YYYY-MM-DD
+
+## Conversation
+
+### 🧑‍💻 User
+
+<原文>
+
+### 🤖 Assistant
+
+<原文>
+```
+
+4. 落盘到 `work/raw/`，再用 `01` 验证 `INDEX_OK`。
+
+这条 DOM 兜底只适用于**你自己账号、自己可见**的会话；不要把别人的聊天或登录态抓下来。
+
+### S3–S5 三条命令
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db --query 记错
+py -3.12 -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md
+py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
+```
+
+### S6 二层回流
+
+只有 `scripts/05_deep_backfill.py` 存在时才可用：
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2
+```
+
+`--apply-signed` 必须由本人对每条候选确认后再加；不要让 Agent 自己签字。
+
+### S6b 检索层（图 / 时间 / 关键词）
+
+需要先有 `work/unified_index.db`（S3 产物）：
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026-11-20 --limit 50
+```
+
+它会依次跑 `05_temporal_index.py backfill`（事件时间优先、未知不伪装成提及日）、`06_graph_index.py build`（规则抽取实体-关系边；未知事件不伪造 valid time）、`07_recall_time_graph.py`（时间 / 1~2 跳图 / FTS 关键词三路召回）。这是**辅助检索**，不是 6 份档案的替代品；图的抽取是规则法，召回不保证覆盖开放域表达。
+
+### S7 最终验收
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py verify --kit work/kit --strict
+```
+
+看到 `VALIDATE_OK` 才算 6 文件结构合格。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
+
+## 3. 快速演示（不访谈、不导出）
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py demo
+```
+
+期望 `INDEX_OK → FOUR_WAY_OK → VALIDATE_OK → DEMO_OK`。
+
+## 4. 交付给下一个 Agent
+
+把 `work/kit/` 整个目录给它可以；或者先打包：
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py package --out dist/xh-dossier.zip
+```
+
+包里不含 `work/`、`.git/`、`dist/`；raw 和访谈原文默认只留本机。
+
+## 5. 硬边界
+
+- 不伪造访谈答案；不确定写 `[待确认]`，并给出原文/出处。
+- 不把提及时间当事件时间；看 `said=` 和 `event=` 两列。
+- 不把 assistant 的 Thought Process 当用户记忆。
+- 不替用户签字；`--apply-signed` 只能本人确认后执行。
+- 不把别人的聊天、Cookie、密码、验证码写进 raw。
+- 浏览器 `Save As` 原生弹窗、登录/验证码必须交还本人。
