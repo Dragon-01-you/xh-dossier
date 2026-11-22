@@ -25,7 +25,7 @@ def test_readme_declares_dev_dependencies_for_pytest() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     requirements = (REPO_ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
 
-    assert "Python 3.10+" in readme
+    assert "Python 3.11+" in readme
     assert "requirements-dev.txt" in readme
     assert "python -m pip install -r requirements-dev.txt" in readme
     assert "pytest" in requirements.lower()
