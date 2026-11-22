@@ -183,7 +183,12 @@ def extract_relations(
     """
     edges: list[dict[str, str]] = []
     negation_skipped = 0
-    entity_names = {e["canonical_name"] for e in entities}
+    # Deterministic order: a Python set's iteration order varies across processes
+    # (hash randomization), which used to make edge counts fluctuate for the same DB.
+    entity_names = sorted(
+        {e["canonical_name"] for e in entities},
+        key=lambda name: (-len(name), name),
+    )
 
     for predicate, pattern in RELATION_PATTERNS:
         for match in pattern.finditer(content):
