@@ -140,8 +140,37 @@ def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
 
 def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
     text = path.read_text(encoding="utf-8", errors="replace")
+
+    # AfterChat / real exporter format:
+    #   ## Metadata / - **Time:** 2026-11-18 ... / ## Conversation
+    #   ### 🧑‍💻 User   /   ### 🤖 Assistant
+    # Legacy format: plain "User:" / "Assistant:" lines after ## headings.
+    real_export = "## Conversation" in text and ("🧑‍💻 User" in text or "🤖 Assistant" in text)
+    file_ts = "unknown"
+    ts_m = re.search(r"\*\*Time:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
+    if ts_m:
+        file_ts = ts_m.group(1)
+
+    if real_export:
+        conv = text.split("## Conversation", 1)[1]
+        turn_re = re.compile(r"(?m)^#{2,4}\s+(🧑‍💻\s*User|🤖\s*Assistant|👤\s*User|🤖\s*AI)\s*$")
+        parts = turn_re.split(conv)
+        rows: list[dict[str, str]] = []
+        for i in range(1, len(parts) - 1, 2):
+            label, body_raw = parts[i], parts[i + 1]
+            role = "user" if "User" in label else "assistant"
+            body = clean_text(body_raw)
+            if len(body) >= 4:
+                rows.append({
+                    "source_file": path.name,
+                    "created_at": file_ts,
+                    "role": role,
+                    "content": body,
+                })
+        return rows
+
     sections = re.split(r"(?m)^#{2,3}\s+", text)
-    rows: list[dict[str, str]] = []
+    rows = []
     turn_re = re.compile(r"(?mi)^(?=(?:user|assistant|ai|助手|用户)\s*[:：])")
 
     for idx, section in enumerate(sections):
@@ -149,7 +178,7 @@ def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
         if not raw_block:
             continue
         date_m = re.search(r"(\d{4}-\d{2}-\d{2})", raw_block)
-        ts = date_m.group(1) if date_m else "unknown"
+        ts = date_m.group(1) if date_m else file_ts
         if idx > 0:
             # Skip heading-only sections with no body lines beneath them
             if "\n" not in raw_block:

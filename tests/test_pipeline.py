@@ -323,3 +323,18 @@ def test_strict_catches_ascii_placeholders_and_ignores_autolinks(tmp_path: pathl
     )
     ok_link, msgs_link = mod_val.validate_kit(kit, strict=True)
     assert ok_link, msgs_link
+
+def test_extract_real_afterchat_export_format(tmp_path: pathlib.Path) -> None:
+    p = tmp_path / "real.md"
+    p.write_text(
+        "## Metadata\n- **Title:** 测试对话\n- **Time:** 2026-11-18 17:50:21 +08:00\n\n## Conversation\n"
+        "### 🧑‍💻 User\n\n我之前大一那会做过一个电商副业，后来砍掉了。现在只想把 AI 入职档案跑通。\n\n"
+        "### 🤖 Assistant\n\n明白。你现在的主线是跑通档案，不是重开电商。\n",
+        encoding="utf-8",
+    )
+    rows = mod_clean._extract_from_text(p)
+    assert len(rows) == 2
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+    assert all(r["created_at"] == "2026-11-18" for r in rows)
+    assert "电商副业" in rows[0]["content"]
+    assert "跑通档案" in rows[1]["content"]
