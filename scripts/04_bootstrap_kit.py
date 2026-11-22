@@ -55,14 +55,22 @@ PRINCIPLE_CUES = (
     "质量", "速度",
 )
 NEGATIVE_CUES = (
-    "踩坑", "坑", "失败", "错", "返工", "问题", "拖延", "没做", "没发",
-    "崩", "报错", "重来", "不行", "卡住", "放弃", "白做", "浪费时间",
-    "没完成", "什么都没", "没听懂", "没达到", "有问题",
+    "踩坑", "失败", "返工", "报错", "崩", "重来", "不行", "卡住", "放弃",
+    "白做", "浪费时间", "没完成", "什么都没", "没听懂", "没达到", "有问题",
+    "搞错", "错得", "没做", "没发",
 )
 POSITIVE_CUES = (
     "成功", "跑通", "有效", "完成", "解决", "好用", "满意",
     "喜欢", "进步", "收获", "值得", "落地",
 )
+# Conversational troubleshooting aimed at the assistant is not a durable
+# negative case. It is a live bug report, not a lesson the dossier should keep.
+META_RE = re.compile(
+    r"(你等一下|我感觉这里|你这里|你那个|你这|你搞|你在干|怎么回事|干什么|搞什么|"
+    r"我不是|我只是|我想问|你说|你看|你听|你帮我|你能不能|你直接)"
+)
+LIST_ITEM_RE = re.compile(r"^\d+[.、)）]\s*")
+
 
 # Material that is not the user's own durable view: pasted prompts, role cards,
 # AI summaries, URLs, code fences, tool logs. Keep it out of the dossier.
@@ -262,6 +270,10 @@ def candidate_sentence(text: str, kind: str) -> str:
         part = strip_request_tail(part)
         if len(part) < 12 or len(part) > 220:
             continue
+        if LIST_ITEM_RE.match(part):
+            continue
+        if META_RE.search(part):
+            continue
         if any(mark in part for mark in ("✅", "├", "└", "│", "|", "**")):
             continue
         if part.count(",") + part.count("、") > 6:
@@ -301,6 +313,8 @@ def candidate_sentence(text: str, kind: str) -> str:
                 continue
             s = score(part, RULE_CUES)
         elif kind == "negative":
+            if len(part) < 24:
+                continue
             if not EXPERIENCE_RE.search(part):
                 continue
             s = score(part, NEGATIVE_CUES)
