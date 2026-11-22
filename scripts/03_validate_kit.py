@@ -42,6 +42,7 @@ def validate_kit(
 
     passed = True
     unconfirmed_total = 0
+    uncertain_prose_total = 0
 
     for fname in REQUIRED_KIT_FILES:
         fpath = target_dir / fname
@@ -55,12 +56,22 @@ def validate_kit(
             passed = False
 
         for line in text.splitlines():
-            if any(p in line for p in ("禁止", "严禁", "不要说", "AI 腔调")):
-                continue
             for cliche in AI_CLICHES:
-                if cliche in line:
-                    diagnostics.append(f"CLICHE found in {fname}: '{cliche}'")
-                    passed = False
+                if cliche not in line:
+                    continue
+                # Issue #2 (Bug A): a line merely containing 禁止/严禁 used to be
+                # skipped wholesale, so "禁止说'这是一个非常好的问题'" passed.
+                # Only treat the phrase as an intentional QUOTED example when it is
+                # wrapped in quotes/book-title marks AND the line is clearly a
+                # rule statement. Otherwise it is a real violation.
+                # Paired quote styles: same-char ('...') and Chinese open/close ("...").
+                quote_pairs = [("'", "'"), ('"', '"'), ("`", "`"), ("“", "”"), ("「", "」")]
+                quoted = any(open_q + cliche + close_q in line for open_q, close_q in quote_pairs)
+                is_rule_line = any(p in line for p in ("禁止", "严禁", "不要说", "禁用水话", "AI 腔调"))
+                if quoted and is_rule_line:
+                    continue
+                diagnostics.append(f"CLICHE found in {fname}: '{cliche}'")
+                passed = False
 
         leaked_paths = SENSITIVE_PATH_RE.findall(text)
         if leaked_paths:
@@ -76,15 +87,29 @@ def validate_kit(
         # Skip backtick-quoted meta references like `[待确认]` in AI collaboration instructions (e.g. AGENTS.md)
         cleaned_for_unconfirmed = re.sub(r"`\[待确认\]`", "", text)
         unconfirmed_total += cleaned_for_unconfirmed.count("[待确认]")
+        for cue in ("记不清", "待核实", "大概", "可能"):
+            uncertain_prose_total += text.count(cue)
         placeholders = PLACEHOLDER_RE.findall(text)
         if strict and placeholders:
             diagnostics.append(f"UNFILLED placeholders in {fname}: {placeholders[:5]}")
             passed = False
 
     if unconfirmed_total > 0:
-        diagnostics.append(f"INFO: {unconfirmed_total} '[待确认]' marker(s) pending backfill confirmation.")
-        if strict:
-            passed = False
+        # Issue #2 (Bug B): SKILL.md rule 4 REQUIRES marking uncertain facts as
+        # [待确认] at interview time. Failing strict on that marker punished
+        # rule-following kits. It is informational, not a hard failure.
+        diagnostics.append(
+            f"INFO: {unconfirmed_total} '[待确认]' marker(s) pending backfill confirmation "
+            f"(allowed by SKILL.md rule 4; clear them during layer-1 backfill)."
+        )
+
+    # Issue #2 (Bug C): uncertainty written in natural prose ("记不清", "待核实")
+    # was invisible to the checker. Warn (never fail) so a human can review.
+    if uncertain_prose_total > 0:
+        diagnostics.append(
+            f"UNCERTAIN_PROSE: {uncertain_prose_total} prose uncertainty cue(s) "
+            f"(记不清/待核实/大概/可能) — review and mark [待确认] if needed."
+        )
 
     return passed, diagnostics
 
