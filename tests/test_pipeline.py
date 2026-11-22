@@ -217,3 +217,52 @@ def test_validate_kit_templates_placeholders_and_pii(tmp_path: pathlib.Path) -> 
     ok_leak, msgs_leak = mod_val.validate_kit(clean_kit, strict=True)
     assert not ok_leak
     assert any("PII_OR_SECRET_RISK" in m for m in msgs_leak)
+
+
+def _kit_with(tmp_path: pathlib.Path, extra_line: str) -> tuple[bool, list[str]]:
+    """Build an otherwise-valid kit whose 02 file ends with `extra_line`, then validate it strictly."""
+    kit = tmp_path / "kit"
+    kit.mkdir()
+    body = "这是经过核实并亲口拍板的真实个人核心记录条目，用于测试验证完整性。"
+    for fname in mod_val.REQUIRED_KIT_FILES:
+        (kit / fname).write_text(f"# {fname}\n\n" + body * 3, encoding="utf-8")
+    (kit / "AGENTS.md").write_text((REPO_ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8")
+    (kit / "02-核心判断准则.md").write_text(f"# 02\n\n{body * 3}\n{extra_line}", encoding="utf-8")
+    return mod_val.validate_kit(kit, strict=True)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        # GitHub tokens (classic PAT and fine-grained) used to slip through because only sk- was matched.
+        "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+        "github_pat_11ABCDEFG0123456789_abcdefghijklmnop",
+        # AWS access key id
+        "AKIAIOSFODNN7EXAMPLE",
+        # PRC mobile number
+        "联系电话 13812345678",
+        # PRC resident id (area + 1980-01-01 + seq + checksum)
+        "身份证 110101198001011234",
+    ],
+)
+def test_validate_kit_detects_common_pii_and_credentials(tmp_path: pathlib.Path, secret: str) -> None:
+    ok, msgs = _kit_with(tmp_path, secret)
+    assert not ok, f"expected leak to be flagged: {secret}"
+    assert any("PII_OR_SECRET_RISK" in m for m in msgs)
+
+
+@pytest.mark.parametrize(
+    "benign",
+    [
+        # Dates, versions, counts and long digit runs must never be mistaken for PII.
+        "日期 2026-11-22，版本 v1.2.3，共 1234567 条记录",
+        "长串数字 12345678901234567890",
+        "时间 138 秒，编号 NO.20260101",
+        "年份 2020 和 1999，月份 10-12",
+        # Legit absolute paths are fine; only the user-home segment is sensitive.
+        "路径 D:\\我的知识库\\raw\\ 与 E:\\vault\\notes",
+    ],
+)
+def test_validate_kit_does_not_false_positive_on_benign_numbers(tmp_path: pathlib.Path, benign: str) -> None:
+    ok, msgs = _kit_with(tmp_path, benign)
+    assert ok, f"benign content wrongly flagged: {benign} -> {msgs}"
