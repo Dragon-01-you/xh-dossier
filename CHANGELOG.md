@@ -2,6 +2,28 @@
 
 本文件只记录**真实合并、真实跑通**的变更。未验证的计划不写进来。
 
+## 0.2.0-rc.3 — 2026-11-23
+
+### 新增：从混乱聊天直接生成 6 份初稿
+- `scripts/04_bootstrap_kit.py`：从 SQLite 真实用户消息生成 `AGENTS.md` + 5 份档案 + `_evidence/chat-lines.md` 行号证据。
+- 每条候选带 `原文` + `出处`；不确定项用合规 `[待确认]`（原文/出处齐全），不放宽 `--strict`。
+- 生成前清理本地路径、手机号、证件号、`SecretId` / `SecretKey` / `AKID`；提示词模板、assistant 文本、辱骂/歌词类噪声不进入档案。
+- 优先使用工作类会话标题（项目/知识库/AI/3D/设计等）；工作样本不足时才回退全量。
+- 真实 59 个豆包导出、729 条记录：108 条可用工作原话 → 6 份档案 `VALIDATE_OK`；真实 DOM 兜底 5 个会话 → 18 条记录 → `BUILD_OK`。
+
+### 新增：一条命令跑完主链路
+- `scripts/xh.py build`：`raw → 01 index → 02 match → 04 bootstrap → 05 broad backfill → 03 validate` 一条命令。
+- `scripts/xh.py bootstrap`：只生成 6 份初稿。
+- `05_deep_backfill.py --broad`（`xh.py backfill --broad`）：在严格自挫信号之外，补充未被档案引用的身份/规则/判断类原话；每条仍 `needs_llm=true` 且未签字。
+- 真实 729 库 broad 模式：`candidates=40`，四类 patch 文件均生成；严格模式仍保持原行为（真实库 `candidates=0`）。
+
+### 修复：密钥泄漏
+- `03_validate_kit.py` 的敏感信息正则新增 `AKID...` 与 `SecretId/SecretKey/AccessKey...`；生成器和校验器双层拦截。
+
+### 测试
+- 新增 `tests/test_bootstrap_kit.py`：6 份文件严格校验、证据行、密钥不泄漏、broad 只产未引用原话。
+- 全量 `191 passed`；真实 6 档案 `VALIDATE_OK`；真实 59 导出 `BUILD_OK`。
+
 ## 0.2.0-rc.2 — 2026-11-23
 
 这是 main 合并后的发布候选，尚未打 tag、尚未生成 GitHub Release。

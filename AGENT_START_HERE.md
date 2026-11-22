@@ -23,7 +23,36 @@ py -3.12 -X utf8 scripts/xh.py init
 - `kit/`：6 份档案草稿
 - `reports/`、`evidence/`
 
-## 2. 真实全流程（推荐顺序）
+## 2. 只有聊天记录，先出一版 6 份初稿（推荐）
+
+如果手上已经有导出的 `work/raw/`，一条命令走完：
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2
+```
+
+期望：
+
+```text
+INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates=N -> VALIDATE_OK -> BUILD_OK
+```
+
+产物：
+- `work/kit/`：6 份档案 + `_evidence/chat-lines.md`（每条都带行号原文）
+- `work/layer2/l2_candidates.md`：二层回流候选（全部待确认，未签字不生效）
+- `work/backfill_candidates.md`：一层四路匹配报告
+
+这条命令只做**机器初稿**：`AGENTS.md` 会明确写 A/B/C 三级事实，`01`–`04` 的每条候选都带 `原文` + `出处`。它不替本人签字，也不把 assistant 的总结当用户记忆。
+
+`BUILD_OK` 不等于“可以交付”。下一步必须做一次**接手 Agent 复核**：
+
+1. 打开 `work/kit/_evidence/chat-lines.md`，逐条核对 `01`–`04` 的引用；
+2. 把“请求/提示词/assistant 总结”误入 B 级的条目删掉，只保留本人自述、规则、判断、正反例；
+3. 保留 `[待确认]`，不要用常识补全；
+4. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
+5. 再把 `work/kit/` 交给下一个 Agent，而不是把机器初稿直接当定稿。
+
+## 3. 真实全流程（推荐顺序）
 
 ```text
 S0 doctor
@@ -108,7 +137,7 @@ py -3.12 -X utf8 scripts/xh.py verify --kit work/kit --strict
 
 看到 `VALIDATE_OK` 才算 6 文件结构合格。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
 
-## 3. 快速演示（不访谈、不导出）
+## 4. 快速演示（不访谈、不导出）
 
 ```powershell
 py -3.12 -X utf8 scripts/xh.py demo
@@ -116,7 +145,7 @@ py -3.12 -X utf8 scripts/xh.py demo
 
 期望 `INDEX_OK → FOUR_WAY_OK → VALIDATE_OK → DEMO_OK`。
 
-## 4. 交付给下一个 Agent
+## 5. 交付给下一个 Agent
 
 把 `work/kit/` 整个目录给它可以；或者先打包：
 
@@ -126,7 +155,7 @@ py -3.12 -X utf8 scripts/xh.py package --out dist/xh-dossier.zip
 
 包里不含 `work/`、`.git/`、`dist/`；raw 和访谈原文默认只留本机。
 
-## 5. 硬边界
+## 6. 硬边界
 
 - 不伪造访谈答案；不确定写 `[待确认]`，并给出原文/出处。
 - 不把提及时间当事件时间；看 `said=` 和 `event=` 两列。

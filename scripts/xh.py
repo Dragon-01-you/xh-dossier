@@ -28,6 +28,7 @@ REQUIRED_SCRIPTS = [
     "01_clean_and_index.py",
     "02_four_way_match.py",
     "03_validate_kit.py",
+    "04_bootstrap_kit.py",
 ]
 OPTIONAL_SCRIPTS = [
     "00_export_wizard.py",
@@ -216,6 +217,56 @@ def match(args: argparse.Namespace) -> int:
     return _run(cmd)
 
 
+def bootstrap(args: argparse.Namespace) -> int:
+    db = pathlib.Path(args.db).expanduser()
+    out = pathlib.Path(args.out).expanduser()
+    return _run([sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")), "--db", str(db), "--out", str(out)])
+
+
+def build(args: argparse.Namespace) -> int:
+    """One-command chain: raw chat -> index -> match -> 6-file draft -> L2 proposal -> validate."""
+    raw = pathlib.Path(args.raw).expanduser()
+    db = pathlib.Path(args.db).expanduser()
+    kit = pathlib.Path(args.kit).expanduser()
+    l2 = pathlib.Path(args.l2).expanduser()
+    report = pathlib.Path(args.report).expanduser()
+    steps = [
+        [sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")),
+         "--raw", str(raw), "--db", str(db), "--query", args.query],
+        [sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
+         "--db", str(db), "--out", str(report)],
+        [sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")),
+         "--db", str(db), "--out", str(kit)],
+    ]
+    for step in steps:
+        rc = _run(step)
+        if rc != 0:
+            return rc
+    backfill_script = _script("05_deep_backfill.py")
+    if backfill_script.is_file():
+        rc = _run([sys.executable, "-X", "utf8", str(backfill_script),
+                   "--profiles", str(kit), "--first-pass", str(report),
+                   "--db", str(db), "--out", str(l2), "--broad"])
+        if rc != 0:
+            return rc
+    if not args.skip_retrieval and all(_script(n).is_file() for n in ("05_temporal_index.py", "06_graph_index.py", "07_recall_time_graph.py")):
+        for step in (
+            [sys.executable, "-X", "utf8", str(_script("05_temporal_index.py")), "--db", str(db), "--action", "backfill"],
+            [sys.executable, "-X", "utf8", str(_script("06_graph_index.py")), "--db", str(db), "--action", "build", "--rebuild"],
+            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--limit", "5"],
+        ):
+            rc = _run(step)
+            if rc != 0:
+                return rc
+    rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
+               "--target", str(kit), "--strict"])
+    payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2), report=str(report))
+    path = _write_receipt("build", payload)
+    print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
+    print("receipt:", path)
+    return rc
+
+
 def retrieval(args: argparse.Namespace) -> int:
     """Build temporal/graph indexes, then run the combined recall query."""
     db = pathlib.Path(args.db).expanduser()
@@ -271,6 +322,8 @@ def backfill(args: argparse.Namespace) -> int:
         cmd.append("--apply-signed")
     if args.confirm:
         cmd.append("--confirm")
+    if args.broad:
+        cmd.append("--broad")
     return _run(cmd)
 
 
@@ -336,6 +389,21 @@ def main() -> int:
     p.add_argument("--strict", action="store_true")
     p.set_defaults(func=verify)
 
+    p = sub.add_parser("bootstrap", help="build six profile drafts from a real chat index")
+    p.add_argument("--db", default=str(WORK / "unified_index.db"))
+    p.add_argument("--out", default=str(WORK / "kit"))
+    p.set_defaults(func=bootstrap)
+
+    p = sub.add_parser("build", help="one-command: raw -> index -> 6 drafts -> L2 proposal -> validate")
+    p.add_argument("--raw", default=str(WORK / "raw"))
+    p.add_argument("--db", default=str(WORK / "unified_index.db"))
+    p.add_argument("--kit", default=str(WORK / "kit"))
+    p.add_argument("--l2", default=str(WORK / "layer2"))
+    p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
+    p.add_argument("--query", default="记错")
+    p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
+    p.set_defaults(func=build)
+
     p = sub.add_parser("retrieval", help="build temporal/graph indexes and run recall")
     p.add_argument("--db", default=str(WORK / "unified_index.db"))
     p.add_argument("--as-of", default=None)
@@ -352,6 +420,7 @@ def main() -> int:
     p.add_argument("--out", default=None)
     p.add_argument("--apply-signed", action="store_true")
     p.add_argument("--confirm", action="store_true")
+    p.add_argument("--broad", action="store_true", help="also propose durable records not cited by the kit")
     p.set_defaults(func=backfill)
 
     p = sub.add_parser("package", help="build a release zip without .git/work")
