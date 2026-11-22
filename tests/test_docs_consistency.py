@@ -19,3 +19,13 @@ def test_readme_stage1_round_count_matches_interview_skill() -> None:
 
     assert "6 轮" in skill
     assert "每轮只问 `3` 个问题" in skill
+
+
+def test_readme_declares_dev_dependencies_for_pytest() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    requirements = (REPO_ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+
+    assert "Python 3.10+" in readme
+    assert "requirements-dev.txt" in readme
+    assert "python -m pip install -r requirements-dev.txt" in readme
+    assert "pytest" in requirements.lower()

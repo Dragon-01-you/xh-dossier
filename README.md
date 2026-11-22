@@ -56,11 +56,16 @@
 
 ---
 
-## 三、三分钟现场演示（零依赖、直接可跑）
+## 三、三分钟现场演示（流水线零第三方依赖，测试需 pytest）
+
+**环境要求：Python 3.10+。** 清洗、匹配、校验脚本只使用标准库；只有最后的 `pytest` 测试需要单独安装开发依赖。
 
 仓库自带一套完全虚构脱敏的示例数据 [examples/sample_raw/](examples/sample_raw/)，在根目录直接运行：
 
 ```bash
+# 0. 安装测试依赖（仅第一次；不跑测试可跳过）
+python -m pip install -r requirements-dev.txt
+
 # 1. 清洗去重 + 建立 SQLite FTS5 冷库
 python -X utf8 scripts/01_clean_and_index.py --raw examples/sample_raw --db work/unified_index.db --query 记错
 
