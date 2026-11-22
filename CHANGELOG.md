@@ -15,14 +15,15 @@
 - `scripts/xh.py build`：`raw → 01 index → 02 match → 04 bootstrap → 05 broad backfill → 05/06 index → 07 三路召回 → 03 validate` 一条命令；默认跑检索，`--skip-retrieval` 才跳过。
 - `scripts/xh.py bootstrap`：只生成 6 份初稿。
 - `05_deep_backfill.py --broad`（`xh.py backfill --broad`）：在严格自挫信号之外，补充未被档案引用的身份/规则/判断类原话；每条仍 `needs_llm=true` 且未签字。
-- 真实 729 库 broad 模式：`candidates=40`，四类 patch 文件均生成；严格模式仍保持原行为（真实库 `candidates=0`）。
+- `08_l2_apply.py`（`xh.py l2-apply`）：把二层候选复制成 `kit_next`，追加“二层回流待确认区”，每条带 `原文/出处`；不填签字栏，不改正式档案。`build` 默认调用它，`--no-l2-apply` 可关闭。
+- `04_bootstrap_kit.py` 增加请求句/粘贴材料/表格式清单过滤，候选只保留本人自述的完整句子；真实 59 导出从“请求混入身份”降到 `identity=4 / mainline=3 / principles=1 / rules=8 / negative=8 / positive=0`（正例样本不足时明确留空，不硬凑）。
 
 ### 修复：密钥泄漏
 - `03_validate_kit.py` 的敏感信息正则新增 `AKID...` 与 `SecretId/SecretKey/AccessKey...`；生成器和校验器双层拦截。
 
 ### 测试
-- 新增 `tests/test_bootstrap_kit.py`：6 份文件严格校验、证据行、密钥不泄漏、broad 只产未引用原话。
-- 全量 `191 passed`；真实 6 档案 `VALIDATE_OK`；真实 59 导出 `BUILD_OK`；真实 729 库三路召回分别命中 `temporal=5 / graph=5 / keyword=5`。
+- 新增 `tests/test_bootstrap_kit.py`：6 份文件严格校验、证据行、密钥不泄漏、broad 只产未引用原话、二层未签字区可校验。
+- 全量 `192 passed`；真实 6 档案 `VALIDATE_OK`；真实 59 导出 `BUILD_OK`；真实 729 库三路召回分别命中 `temporal=5 / graph=5 / keyword=5`。
 
 ## 0.2.0-rc.2 — 2026-11-23
 
