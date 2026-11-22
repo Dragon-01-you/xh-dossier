@@ -131,3 +131,17 @@ def test_source_root_extra_dir_resolves(tmp_path: pathlib.Path) -> None:
     line = "[待确认] 疑点 ｜ 原文：「一直在做对讲」 ｜ 出处：chat.md:12"
     ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True, source_roots=[source_root])
     assert ok, msgs
+
+
+def test_dotdot_source_is_traversal(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「不该读到」 ｜ 出处：../outside.md:1"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_TRAVERSAL" in m for m in msgs), msgs
+
+
+def test_absolute_source_is_traversal(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「不该读到」 ｜ 出处：C:\\Windows\\win.ini:1"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_TRAVERSAL" in m for m in msgs), msgs
