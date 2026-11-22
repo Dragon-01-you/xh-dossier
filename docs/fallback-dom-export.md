@@ -53,11 +53,11 @@ python -X utf8 scripts/01_clean_and_index.py --raw <dom导出目录> --db <输�
 ```
 INDEX_OK total_raw=4 dedup_skipped=0 indexed=4
 QUERY '世界指南' -> 2 hit(s)
-  [REC-0001 | said=2026-11-23 | event=2026-11-23 | stated] ...
-  [REC-0002 | said=2026-11-23 | event=2026-11-23 | unknown] ...
+  [REC-0001 | said=2026-11-23 | event= | unknown] ...
+  [REC-0002 | said=2026-11-23 | event= | unknown] ...
 ```
 
-即：DOM 导出 → Stage 3 索引 → 关键词召回，全链路可用。第二行 `event= unknown` 是 PR #37 修复后的预期行为（状态/描述句不再把 `created_at` 复制成事件时间），不是导出丢失。
+即：DOM 导出 → Stage 3 索引 → 关键词召回，全链路可用。两行 `event=` 都为空、`date_kind=unknown`，这是 PR #37 修复后的预期行为：普通工作指令和助手交付说明都不是“当天发生的事件”，不再把 `created_at` 复制成事件时间，不是导出丢失。
 
 ## 5. 已知局限（不要当成 AfterChat 的等价替代）
 
