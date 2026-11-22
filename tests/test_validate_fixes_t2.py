@@ -54,6 +54,13 @@ def test_all_chinese_quote_styles_can_be_rule_examples(tmp_path: pathlib.Path) -
         assert ok is True, (open_q, diags)
 
 
+def test_real_kit_style_verb_xie_allows_quoted_example(tmp_path: pathlib.Path) -> None:
+    # Found on the real 6-file kit: 严禁写「这是一个非常好的问题」…
+    kit = make_kit(tmp_path, {"AGENTS.md": "严禁写「这是一个非常好的问题」这类水话。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
 def test_impossible_calendar_date_fails(tmp_path: pathlib.Path) -> None:
     kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 事件日期：2025-02-30"})
     ok, diags = vk.validate_kit(kit)
@@ -73,6 +80,45 @@ def test_month_only_date_is_not_treated_as_impossible(tmp_path: pathlib.Path) ->
     assert ok is True, diags
 
 
+def test_natural_language_uncertainty_fails(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 我开始做这个项目的日期记不清了。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("UNCERTAIN_SEMANTIC" in d for d in diags), diags
+
+
+def test_spaced_uncertainty_fails_after_nfkc(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 这件事待 核 实后再写。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("UNCERTAIN_SEMANTIC" in d for d in diags), diags
+
+
+def test_uncertainty_degree_rule_is_not_flagged(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"AGENTS.md": "- 保留不确定度词，绝不瞎编肯定。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_natural_language_uncertainty_passes_when_marked(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(
+        tmp_path,
+        {"01-身份与当前主线.md": "- [待确认] 开始日期 ｜ 原文：「大概是秋天」 ｜ 出处：raw/chat.md:12"},
+    )
+    raw = kit / "raw"
+    raw.mkdir()
+    (raw / "chat.md").write_text(
+        "\n".join(["x"] * 11 + ["User: 大概是秋天开始做的"]), encoding="utf-8"
+    )
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_uncertain_semantic_rule_line_is_not_flagged(tmp_path: pathlib.Path) -> None:
+    # A rule that says "记不清就标 [待确认]" is documentation, not a claim.
+    kit = make_kit(tmp_path, {"AGENTS.md": "- 记不清日期时先标 [待确认]，留待回填。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
 def test_impossible_dates_hard_fail_in_both_modes(tmp_path: pathlib.Path) -> None:
     # Regression lock: 2/30, month 13, 2/31 must hard fail in non-strict AND strict.
     # This gate must not be weakened later into a strict-only warning or a soft INFO.
