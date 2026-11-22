@@ -54,27 +54,31 @@ def run_recall(
     """Run temporal + graph + keyword recall and return a structured combined report."""
     report: dict = {"temporal": [], "graph": [], "keyword": []}
 
-    # Temporal road (Layer 4)
-    if as_of:
-        report["temporal"] = _mod05.query_as_of(
-            db_path, as_of, clock=clock, limit=limit, keyword=keyword
-        )
-    else:
-        report["temporal"] = _mod05.query_time_range(
-            db_path, since=since, until=until, clock=clock, limit=limit, keyword=keyword
-        )
+    # Temporal road (Layer 4) — only when the caller actually asked for a time axis.
+    # An unfiltered temporal query would return every record and inflate counts.
+    if as_of or since or until:
+        if as_of:
+            report["temporal"] = _mod05.query_as_of(
+                db_path, as_of, clock=clock, limit=limit, keyword=keyword
+            )
+        else:
+            report["temporal"] = _mod05.query_time_range(
+                db_path, since=since, until=until, clock=clock, limit=limit, keyword=keyword
+            )
 
-    # Graph road (Layer 3)
-    if entity:
-        report["graph"] = _mod06.graph_neighbors(
-            db_path, entity, hops=hops, as_of=as_of, relation=relation,
-            since=since, until=until, limit=limit,
-        )
-    else:
-        report["graph"] = _mod06.query_relations(
-            db_path, entity=entity, relation=relation, keyword=keyword,
-            as_of=as_of, since=since, until=until, limit=limit,
-        )
+    # Graph road (Layer 3) — only when an entity or predicate was requested.
+    # A bare keyword belongs to the FTS road; it must not turn into "all edges".
+    if entity or relation:
+        if entity:
+            report["graph"] = _mod06.graph_neighbors(
+                db_path, entity, hops=hops, as_of=as_of, relation=relation,
+                since=since, until=until, limit=limit,
+            )
+        else:
+            report["graph"] = _mod06.query_relations(
+                db_path, entity=entity, relation=relation, keyword=keyword,
+                as_of=as_of, since=since, until=until, limit=limit,
+            )
 
     # Existing FTS5 keyword road (Layer 1), kept separate for provenance.
     if keyword:
