@@ -28,8 +28,29 @@ AI_CLICHES = [
 # ASCII (<YYYY-MM>, <your_name>, <TODO>). Exclude real autolinks such as
 # <https://example.com> and <mailto:...>.
 PLACEHOLDER_RE = re.compile(r"<(?!(?:https?://|mailto:))[^>\n]{2,100}>")
-# Detect accidentally leaked local user paths or secrets outside sanitized sample examples
-SENSITIVE_PATH_RE = re.compile(r"(?:[A-Za-z]:\\Users\\[^\\\s]+|/Users/[^/\s]+|/home/[^/\s]+|sk-[A-Za-z0-9]{16,})")
+# Detect accidentally leaked local user paths or secrets outside sanitized sample examples.
+# Each pattern is anchored on a format that is unambiguous in prose, to keep false
+# positives near zero on real Chinese kit files (dates, versions, counts must not fire).
+SENSITIVE_PATH_RE = re.compile(
+    r"(?:"
+    # Local user home paths: only the homedir segment is sensitive, not any absolute path.
+    r"[A-Za-z]:\\Users\\[^\\\s]+"
+    r"|/Users/[^/\s]+"
+    r"|/home/[^/\s]+"
+    # OpenAI-style keys
+    r"|sk-[A-Za-z0-9]{16,}"
+    # GitHub tokens: ghp_/gho_/ghu_/ghs_/ghr_ + 36 chars, or fine-grained github_pat_
+    r"|gh[pousr]_[A-Za-z0-9]{36,}"
+    r"|github_pat_[A-Za-z0-9_]{22,}"
+    # AWS access key id
+    r"|AKIA[0-9A-Z]{16}"
+    # PRC mobile number: 1[3-9] + 9 digits, bounded so long digit runs do not match.
+    r"|(?<!\d)1[3-9]\d{9}(?!\d)"
+    # PRC resident ID: 6-digit area + 8-digit birthdate + 3 digits + checksum (digit or X).
+    # Anchor the birth date to a plausible 19xx/20xx range to avoid matching stray numbers.
+    r"|(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
+    r")"
+)
 
 
 def validate_kit(
