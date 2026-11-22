@@ -113,3 +113,29 @@ def test_multiple_dates_takes_validated_one():
 def test_cjk_full_date_validated():
     event, kind, _ = detect_event_time("记得 2025年9月20日 那次", "2026-11-22")
     assert event == "2025-09-20" and kind == "retrospective"
+
+
+def test_descriptive_progressive_is_not_an_event():
+    # "一座正在被续写的学院档案馆" is branding prose, not "I am doing X now".
+    event, kind, _ = detect_event_time("芯火 · 档案纸，一座正在被续写的学院档案馆", "2026-09-02")
+    assert event == "" and kind == "unknown"
+
+
+def test_quoted_role_state_is_not_an_event():
+    event, kind, _ = detect_event_time('模型不可自封"我现在是自动模式"', "2026-09-02")
+    assert event == "" and kind == "unknown"
+
+
+def test_third_person_today_is_not_an_event():
+    event, kind, _ = detect_event_time("DailyExecution 当日执行：教师今天真正看到的表", "2026-09-02")
+    assert event == "" and kind == "unknown"
+
+
+def test_task_card_heading_is_not_an_event():
+    event, kind, _ = detect_event_time("十一、本轮任务卡 · C0（第一轮，现在开始）", "2026-09-02")
+    assert event == "" and kind == "unknown"
+
+
+def test_ui_label_before_is_not_retrospective():
+    event, kind, _ = detect_event_time("改之前看见代价：每笔 Proposal 带 costs 和人话", "2026-09-02")
+    assert event == "" and kind == "unknown"
