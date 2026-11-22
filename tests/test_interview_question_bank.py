@@ -203,3 +203,16 @@ def test_simulator_rejects_unknown_choice_letter():
     bad["rounds"][1]["answers"][0] = {"question": 1, "choice": "Z"}
     with pytest.raises(sim.SimError, match="不在题库"):
         sim.run_interview(skill, bad)
+
+
+def test_every_round_has_custom_option():
+    # B1: D custom option must exist in rounds 2-6 too, not only round 1.
+    sections = skill.split("### 第 ")
+    assert len(sections) >= 7
+    for sec in sections[2:7]:  # rounds 2..6
+        assert "- `D` 自定义" in sec, sec[:40]
+
+
+def test_open_example_slot_every_round():
+    assert "每轮末尾的开放位" in skill
+    assert "不要把所有正反例采集都压到第 6 轮" in skill
