@@ -121,15 +121,28 @@ def backfill_from_records(db_path: pathlib.Path) -> dict[str, int]:
         if not _records_table_exists(con):
             raise FileNotFoundError("records table not found; cannot backfill temporal facts")
         ensure_temporal_schema(con)
-        rows = con.execute("SELECT rec_id, created_at FROM records ORDER BY rec_id").fetchall()
+        cols = _record_columns(con)
+        has_event_date = "event_date" in cols
+        if has_event_date:
+            rows = con.execute(
+                "SELECT rec_id, created_at, event_date FROM records ORDER BY rec_id"
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT rec_id, created_at FROM records ORDER BY rec_id").fetchall()
         backfilled = 0
         skipped_bad_date = 0
         already = 0
         for row in rows:
-            date = normalize_date(row["created_at"])
+            # #10 event time: valid_from uses the event date when the export has it;
+            # trans_from stays the ingestion/mention date. A blank event_date falls
+            # back to created_at so a legacy row is never silently dropped.
+            event_date = normalize_date(row["event_date"]) if has_event_date else None
+            ingested = normalize_date(row["created_at"])
+            date = event_date or ingested
             if date is None:
                 skipped_bad_date += 1
                 continue
+            trans_date = ingested or date
             cur = con.execute(
                 """
                 INSERT OR IGNORE INTO fact_validity
@@ -140,9 +153,9 @@ def backfill_from_records(db_path: pathlib.Path) -> dict[str, int]:
                 (
                     row["rec_id"],
                     date,
-                    date,
+                    trans_date,
                     row["rec_id"],
-                    "backfill: T and T' share records.created_at (single-date export)",
+                    "backfill: valid_from=event_date/created_at, trans_from=created_at",
                 ),
             )
             if cur.rowcount == 0:
