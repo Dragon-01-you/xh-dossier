@@ -274,7 +274,8 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
         for row in rows:
             content = row["content"] or ""
             event = (row["event_date"] or "").strip()[:10] if has_event_date else ""
-            date = (event or (row["created_at"] or "")[:10]) or None
+            valid_date = event if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", event) else ""
+            date = (valid_date or ((row["created_at"] or "")[:10] if not has_event_date else "")) or None
             trans_date = ((row["created_at"] or "")[:10] or date)
             entities = extract_entities(content, lexicon=lex)
             for ent in entities:
