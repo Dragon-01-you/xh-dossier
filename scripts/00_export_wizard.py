@@ -113,14 +113,16 @@ def main() -> int:
     parser.add_argument("--dest", type=pathlib.Path, default=pathlib.Path("work") / "extensions", help="Download folder")
     args = parser.parse_args()
 
-    run_wizard(
+    result = run_wizard(
         browser=args.browser,
         download_release=args.download_release,
         auto_yes=args.yes,
         dry_run=args.dry_run,
         dest_dir=args.dest,
     )
-    return 0
+    # Issue #19: a declined consent is not an installed extension. Returning 0
+    # made non-interactive callers proceed to export and hit the "no button" dead end.
+    return 0 if result.get("consented") else 1
 
 
 if __name__ == "__main__":
