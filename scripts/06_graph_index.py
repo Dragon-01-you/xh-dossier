@@ -191,6 +191,11 @@ def extract_relations(
             if any(neg in clause for neg in NEGATION_MARKERS):
                 negation_skipped += 1
                 continue  # negation blindness guard: "先不要学习 X" must not become a LEARNS edge
+            # Rule extraction has no real subject parser. Without a first-person cue
+            # in the clause, do not silently attribute a third-person sentence to
+            # 我（本人） (e.g. "Python 使用 ..." is not "I use Python").
+            if "我" not in clause and "本人" not in clause:
+                continue
             cleaned = _clean_span(match.group(1))
             if cleaned is None:
                 continue
@@ -254,13 +259,23 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
             con.commit()
 
         rows = con.execute("SELECT rec_id, created_at, role, content FROM records ORDER BY rec_id").fetchall()
+        # #10: prefer the export's event_date for the graph's valid-time window;
+        # fall back to created_at only for legacy rows without the column.
+        record_cols = [r[1] for r in con.execute("PRAGMA table_info(records)").fetchall()]
+        has_event_date = "event_date" in record_cols
+        if has_event_date:
+            rows = con.execute(
+                "SELECT rec_id, created_at, event_date, role, content FROM records ORDER BY rec_id"
+            ).fetchall()
         lex = list(lexicon)
         entity_count = 0
         edge_count = 0
         negation_skipped = 0
         for row in rows:
             content = row["content"] or ""
-            date = (row["created_at"] or "")[:10] or None
+            event = (row["event_date"] or "").strip()[:10] if has_event_date else ""
+            date = (event or (row["created_at"] or "")[:10]) or None
+            trans_date = ((row["created_at"] or "")[:10] or date)
             entities = extract_entities(content, lexicon=lex)
             for ent in entities:
                 cur = con.execute(
@@ -286,7 +301,7 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
                          trans_from, trans_to, t_invalid, fact_text, rec_id, extractor, confidence)
                     VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, 'rule', 1.0)
                     """,
-                    (rel_id, edge["subject"], edge["relation"], edge["object"], date, date, edge["fact_text"], row["rec_id"]),
+                    (rel_id, edge["subject"], edge["relation"], edge["object"], date, trans_date, edge["fact_text"], row["rec_id"]),
                 )
                 if cur.rowcount:
                     edge_count += 1
