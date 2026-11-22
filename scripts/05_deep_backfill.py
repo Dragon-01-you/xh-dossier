@@ -86,6 +86,17 @@ EXPERIENCE_MARKERS = ("我", "我们", "本人", "上次", "最近", "当时", "
 COMPLAINT_CUES = ("太累", "实在", "每次都要", "总是", "还是没", "居然", "错了", "没发出去", "拖了", "错过", "喊停", "反复", "重新解释")
 MISTAKE_CUES = ("没理解", "记错", "跑偏", "没上线", "停在最后", "一直没发", "改细节", "忘了", "重来")
 
+# Broad mode (opt-in): find durable statements the current kit does not cite.
+# This is still a proposal layer; every result is needs_llm=true and unsigned.
+BROAD_IDENTITY = ("我是", "我叫", "我在做", "我在学", "我想做", "我打算",
+                  "我的项目", "我的目标", "我的主线", "我的背景", "我目前", "我现在")
+BROAD_RULE = ("必须", "禁止", "不要", "不能", "不许", "记住", "铁律", "红线",
+              "规则", "底线", "绝不")
+BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "核心", "关键",
+                   "标准", "验收", "价值", "先", "再")
+BROAD_NEGATIVE = ("踩坑", "坑", "失败", "返工", "问题", "拖延", "没做", "没发",
+                  "崩", "报错", "重来", "不行", "卡住", "放弃", "白做")
+
 # Signal type -> (target profile, section anchor)
 PROFILE_SECTION_MAP = {
     "recurring_mistake": ("04-反面案例清单.md", "## 二、反例标本"),
@@ -398,8 +409,55 @@ def _topic_overlap(content: str, terms: set[str]) -> int:
     return len(grams & terms)
 
 
+def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
+                     limit: int = 40) -> list[L2Candidate]:
+    """Opt-in second pass: durable statements not covered by the current kit.
+
+    The strict signal pass above only mines self-setbacks. A freshly bootstrapped
+    kit also needs the reverse view: identity/rules/principles that appear in the
+    cold DB but are absent from the six files. This mode is deliberately
+    conservative: it requires a durable cue, drops prompt/material records, and
+    marks every result needs_llm so no rule output is treated as a conclusion.
+    """
+    money: list[L2Candidate] = []
+    for r in records:
+        if r["role"] != "user" or r["rec_id"] in coverage.covered_rec_ids:
+            continue
+        ok, _ = classify_narrative(r["content"])
+        if not ok:
+            continue
+        text = r["content"]
+        scores = {
+            "core_fact": sum(2 for c in BROAD_IDENTITY if c in text),
+            "hard_rule": sum(2 for c in BROAD_RULE if c in text),
+            "complaint": sum(2 for c in BROAD_PRINCIPLE if c in text),
+            "recurring_mistake": sum(2 for c in BROAD_NEGATIVE if c in text),
+        }
+        signal, score = max(scores.items(), key=lambda kv: kv[1])
+        if score <= 0:
+            continue
+        target, anchor = PROFILE_SECTION_MAP[signal]
+        if signal == "core_fact":
+            anchor = "## 一、身份候选"
+        money.append(L2Candidate(
+            candidate_id="",
+            rec_id=r["rec_id"],
+            created_at=r["created_at"],
+            signal=signal,
+            target_profile=target,
+            section_anchor=anchor,
+            evidence=f"broad_cue_score={score}; 规则法候选，需语义复核",
+            excerpt=re.sub(r"\s+", " ", text)[:220],
+            source_file=r["source_file"],
+            phrase_hits=score,
+            needs_llm=True,
+        ))
+    money.sort(key=lambda c: (-c.phrase_hits, c.rec_id))
+    return money[:limit]
+
+
 def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
-                    first_pass: FirstPassIndex
+                    first_pass: FirstPassIndex, broad: bool = False
                     ) -> tuple[list[L2Candidate], list[dict[str, str]], list[L2Candidate]]:
     """Design §4.4 C0~C3. Returns (candidates, dropped_with_reason, cross_refs).
 
@@ -482,6 +540,10 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
             cross_refs.append(candidate)
         else:
             candidates.append(candidate)
+    # Broad mode is opt-in and additive; strict candidates keep priority in rank.
+    if broad:
+        existing_ids = {c.rec_id for c in candidates}
+        candidates.extend(c for c in broad_candidates(records, coverage) if c.rec_id not in existing_ids)
     # F5 (partial): cross-document phrase hits drive candidate RANKING (first
     # class sort key) and the evidence field. Inclusion/exclusion still rests
     # on the complaint/mistake cues; phrase mining alone does not yet admit a
@@ -682,12 +744,13 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
 
 
 def run_deep_backfill(profiles_dir: pathlib.Path, first_pass_md: pathlib.Path,
-                      db_path: pathlib.Path, out_dir: pathlib.Path) -> dict:
+                      db_path: pathlib.Path, out_dir: pathlib.Path,
+                      broad: bool = False) -> dict:
     profiles = load_profiles(profiles_dir)
     coverage = build_coverage_index(profiles)
     fp = parse_first_pass(first_pass_md)   # will raise if missing — mandatory input
     records = load_records(db_path)
-    candidates, dropped, cross_refs = coverage_decide(records, coverage, fp)
+    candidates, dropped, cross_refs = coverage_decide(records, coverage, fp, broad=broad)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "l2_candidates.md"
@@ -754,6 +817,8 @@ def main() -> int:
     ap.add_argument("--note", default="")
     ap.add_argument("--apply-signed", action="store_true", help="Write signed candidates into profiles")
     ap.add_argument("--confirm", action="store_true", help="Second confirmation for --apply-signed")
+    ap.add_argument("--broad", action="store_true",
+                    help="Opt-in: also propose durable identity/rule/principle records not cited by the kit")
     args = ap.parse_args()
 
     ledger_path = args.out / "l2_review.jsonl"
@@ -771,7 +836,7 @@ def main() -> int:
         return 0
     if not (args.profiles and args.first_pass and args.db):
         ap.error("--profiles, --first-pass and --db are all required for candidate generation")
-    res = run_deep_backfill(args.profiles, args.first_pass, args.db, args.out)
+    res = run_deep_backfill(args.profiles, args.first_pass, args.db, args.out, broad=args.broad)
     print("L2_BACKFILL_OK " + " ".join(f"{k}={v}" for k, v in res.items() if k != "dropped_by_reason"))
     print("dropped_by_reason=" + json.dumps(res["dropped_by_reason"], ensure_ascii=False))
     return 0
