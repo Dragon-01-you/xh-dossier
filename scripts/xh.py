@@ -249,6 +249,15 @@ def build(args: argparse.Namespace) -> int:
                    "--db", str(db), "--out", str(l2), "--broad"])
         if rc != 0:
             return rc
+    if not args.skip_retrieval and all(_script(n).is_file() for n in ("05_temporal_index.py", "06_graph_index.py", "07_recall_time_graph.py")):
+        for step in (
+            [sys.executable, "-X", "utf8", str(_script("05_temporal_index.py")), "--db", str(db), "--action", "backfill"],
+            [sys.executable, "-X", "utf8", str(_script("06_graph_index.py")), "--db", str(db), "--action", "build", "--rebuild"],
+            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--limit", "5"],
+        ):
+            rc = _run(step)
+            if rc != 0:
+                return rc
     rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
                "--target", str(kit), "--strict"])
     payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2), report=str(report))
@@ -392,6 +401,7 @@ def main() -> int:
     p.add_argument("--l2", default=str(WORK / "layer2"))
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
     p.add_argument("--query", default="记错")
+    p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
     p.set_defaults(func=build)
 
     p = sub.add_parser("retrieval", help="build temporal/graph indexes and run recall")
