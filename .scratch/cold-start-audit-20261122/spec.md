@@ -38,6 +38,14 @@ Scope: 以“零环境新用户”身份，从 clone 跑到发布门禁；不修
   - `02`：`FOUR_WAY_OK records=2`，但 Way 1 / Way 3 / Way 2&4 **全部 0 候选**
 - 结论：低样本下 `FOUR_WAY_OK` 仍被打印，与 CLOUD-06 一致；真实数据没有让它变好。
 
+## 补充：真实多轮会话（2026-11-22 22:12）
+
+- 会话《Build Dirac Sea supercar game》，6 条消息（3 user / 3 assistant），0 unknown。
+- 用户两次纠正 AI（「不太像」「还是没太好」）并明确要求「先测试对比 / 使用 TDD / 再写代码」。
+- `02` 输出 `FOUR_WAY_OK records=6`，但 **Way 1 全 0、Way 4 三个模式全 0**；只有 Way 3 聚出 3 个簇。
+- 文件 SHA256 `145ac561a59d2dc5aac775d42bcf62538430f55df099e13d0b5001aa6342d200`（4071 bytes）。
+- 结论：产品主打的「反复纠正」「先验收再动手」在真实措辞下抓不到；见 issue 07。
+
 ## 复现前提
 
 - AfterChat 源码取自官方仓库 `AfterThink/AfterChat-Script`（AGPL-3.0），因 Greasyfork 在该网络不可达。
