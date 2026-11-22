@@ -131,18 +131,26 @@ def backfill_from_records(db_path: pathlib.Path) -> dict[str, int]:
             rows = con.execute("SELECT rec_id, created_at FROM records ORDER BY rec_id").fetchall()
         backfilled = 0
         skipped_bad_date = 0
+        unknown_event = 0
         already = 0
         for row in rows:
-            # #10 event time: valid_from uses the event date when the export has it;
-            # trans_from stays the ingestion/mention date. A blank event_date falls
-            # back to created_at so a legacy row is never silently dropped.
+            # #10 event time: valid_from uses the event date when the export has it.
+            # If the row has event_date but it is empty / "[记忆，待核]", the event
+            # time is genuinely unknown: store '' (never fake created_at as T) and
+            # let valid-time queries skip it. Transaction time still uses created_at.
             event_date = normalize_date(row["event_date"]) if has_event_date else None
             ingested = normalize_date(row["created_at"])
-            date = event_date or ingested
-            if date is None:
+            if has_event_date:
+                date = event_date or ""
+                trans_date = ingested or ""
+                if not event_date:
+                    unknown_event += 1
+            else:
+                date = ingested
+                trans_date = ingested
+            if not date and not trans_date:
                 skipped_bad_date += 1
                 continue
-            trans_date = ingested or date
             cur = con.execute(
                 """
                 INSERT OR IGNORE INTO fact_validity
@@ -152,10 +160,10 @@ def backfill_from_records(db_path: pathlib.Path) -> dict[str, int]:
                 """,
                 (
                     row["rec_id"],
-                    date,
-                    trans_date,
+                    date or "",
+                    trans_date or "",
                     row["rec_id"],
-                    "backfill: valid_from=event_date/created_at, trans_from=created_at",
+                    "backfill: valid_from=event_date (empty if unknown), trans_from=created_at",
                 ),
             )
             if cur.rowcount == 0:
@@ -168,6 +176,7 @@ def backfill_from_records(db_path: pathlib.Path) -> dict[str, int]:
             "backfilled": backfilled,
             "already_present": already,
             "skipped_bad_date": skipped_bad_date,
+            "unknown_event": unknown_event,
         }
     finally:
         con.close()
@@ -197,7 +206,7 @@ def invalidate_fact(
         if new is None:
             raise KeyError(f"replacement fact not found: {new_fact_id}")
 
-        end_date = normalize_date(valid_to) or new["valid_from"]
+        end_date = normalize_date(valid_to) or new["valid_from"] or new["trans_from"] or ""
         trans_end = normalize_date(trans_to) or end_date
         con.execute(
             """
@@ -300,7 +309,8 @@ def query_as_of(
             facts = con.execute(
                 f"""
                 SELECT * FROM fact_validity
-                 WHERE {start_col} <= ?
+                 WHERE {start_col} IS NOT NULL AND {start_col} <> ''
+                   AND {start_col} <= ?
                    AND ({end_col} IS NULL OR {end_col} > ?)
                  ORDER BY {start_col}, fact_id
                  LIMIT ?
@@ -346,7 +356,7 @@ def query_time_range(
             rows = _fallback_record_query(con, since=start, until=end, as_of=None, limit=limit)
         else:
             start_col, _end_col = CLOCK_COLUMNS[clock]
-            where = ["t_invalid = 0"]
+            where = ["t_invalid = 0", f"{start_col} IS NOT NULL", f"{start_col} <> ''"]
             params: list[Any] = []
             if start is not None:
                 where.append(f"{start_col} >= ?")
