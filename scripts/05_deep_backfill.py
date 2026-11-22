@@ -92,14 +92,20 @@ BROAD_IDENTITY = ("我是", "我叫", "我在做", "我在学", "我想做", "�
                   "我的项目", "我的目标", "我的主线", "我的背景", "我目前", "我现在")
 BROAD_RULE = ("必须", "禁止", "不要", "不能", "不许", "记住", "铁律", "红线",
               "规则", "底线", "绝不")
-BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "核心", "关键",
-                   "标准", "验收", "价值", "先", "再")
-BROAD_NEGATIVE = ("踩坑", "坑", "失败", "返工", "问题", "拖延", "没做", "没发",
-                  "崩", "报错", "重来", "不行", "卡住", "放弃", "白做")
+BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "标准", "验收", "价值")
+BROAD_NEGATIVE = ("踩坑", "失败", "返工", "拖延", "崩", "报错", "卡住", "放弃", "白做")
 PERSONAL_TITLE_MARKERS = ("情感", "歌", "心理", "恋爱", "锁", "不知道", "对话主题")
 L2_NOISE_MARKERS = ("练歌", "唱歌", "开锁", "破解", "绕过", "白嫖", "钥匙")
 L2_REQUEST_MARKERS = ("你可以", "你看", "那你看", "请", "帮我", "你先", "你给我",
                       "你可以看", "看一下", "帮我看看", "深度找", "深度分析")
+BROAD_META_RE = re.compile(
+    r"(你等一下|你这里|你那个|你这|你搞|你在干|怎么回事|干什么|搞什么|"
+    r"那你|你按|你先|你把|你需要|你现在|你觉得|我觉得你可以|我想问|"
+    r"我想知道|继续开始|开始做|我需要你|你帮我|请你|帮我|给我|"
+    r"我不是|我说了|你不要|这里不要|你都没有|根本没有|你进行|你直接|"
+    r"唱歌|唱一下|笑脸|滴答)"
+)
+
 
 
 def _source_title(source_file: str) -> str:
@@ -444,6 +450,8 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
         if not ok:
             continue
         text = r["content"]
+        if BROAD_META_RE.search(text[:160]):
+            continue
         scores = {
             "core_fact": sum(2 for c in BROAD_IDENTITY if c in text),
             "hard_rule": sum(2 for c in BROAD_RULE if c in text),
@@ -452,6 +460,23 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
         }
         signal, score = max(scores.items(), key=lambda kv: kv[1])
         if score <= 0:
+            continue
+        signal_cues = {
+            "core_fact": BROAD_IDENTITY,
+            "hard_rule": BROAD_RULE,
+            "complaint": BROAD_PRINCIPLE,
+            "recurring_mistake": BROAD_NEGATIVE,
+        }[signal]
+        # Keep one short, self-contained sentence that actually carries the
+        # signal; dumping a 500-char request into the pending zone is noise.
+        sentence = next(
+            (s.strip() for s in split_sentences(text)
+             if 20 <= len(s.strip()) <= 220
+             and not BROAD_META_RE.search(s)
+             and any(c in s for c in signal_cues)),
+            "",
+        )
+        if not sentence:
             continue
         target, anchor = PROFILE_SECTION_MAP[signal]
         if signal == "core_fact":
@@ -464,11 +489,12 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
             target_profile=target,
             section_anchor=anchor,
             evidence=f"broad_cue_score={score}; 规则法候选，需语义复核",
-            excerpt=re.sub(r"\s+", " ", text)[:220],
+            excerpt=re.sub(r"\s+", " ", sentence)[:220],
             source_file=r["source_file"],
             phrase_hits=score,
             needs_llm=True,
         ))
+
     money.sort(key=lambda c: (-c.phrase_hits, c.rec_id))
     return money[:limit]
 
