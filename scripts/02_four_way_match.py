@@ -343,7 +343,21 @@ def main() -> int:
     parser.add_argument("--use-fastembed", action="store_true", help="Use fastembed BAAI/bge-small-zh-v1.5 if installed")
     args = parser.parse_args()
 
-    report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    # Expected input failures get a plain-language, actionable message; unexpected ones
+    # still raise so real bugs keep their traceback for diagnosis.
+    try:
+        report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    except FileNotFoundError:
+        print(f"DB_NOT_FOUND: {args.db}")
+        print("  这里要填的是上一步生成的 unified_index.db，需要先跑 01_clean_and_index.py。")
+        print("  例：python -X utf8 scripts/01_clean_and_index.py --raw raw --db work/unified_index.db")
+        return 2
+
+    if report["records"] == 0:
+        print(f"EMPTY_DB: {args.db} 里没有任何对话记录，无法做四路匹配。")
+        print("  通常是上一步导出目录是空的，先确认 raw/ 里确实有导出的原件。")
+        return 2
+
     md = render_backfill_markdown(report)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(md, encoding="utf-8")
