@@ -124,6 +124,51 @@ def test_missing_db_raises_without_creating_empty_file(tmp_path: pathlib.Path) -
     assert not missing.exists()
 
 
+@pytest.mark.parametrize(
+    ("raw_dir", "expect_code", "expect_marker"),
+    [
+        # Missing raw dir: plain-language guidance, not a raw traceback.
+        ("no_such_raw_dir", 2, "RAW_DIR_NOT_FOUND"),
+        # Existing but empty raw dir: the export step really produced nothing.
+        ("empty_raw_dir", 2, "NO_RECORDS"),
+    ],
+)
+def test_clean_cli_reports_input_problems_without_traceback(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    raw_dir: str,
+    expect_code: int,
+    expect_marker: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if raw_dir == "empty_raw_dir":
+        # Present but contains no importable export files at all.
+        (tmp_path / raw_dir).mkdir()
+    monkeypatch.setattr(sys, "argv", ["01_clean_and_index.py", "--raw", raw_dir, "--db", "x.db"])
+    assert mod_clean.main() == expect_code
+    out = capsys.readouterr().out
+    assert expect_marker in out
+    assert "Traceback" not in out
+
+
+def test_match_cli_reports_missing_db_without_traceback(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["02_four_way_match.py", "--db", "missing.db", "--out", "out.md"],
+    )
+    assert mod_match.main() == 2
+    out = capsys.readouterr().out
+    assert "DB_NOT_FOUND" in out
+    assert "Traceback" not in out
+
+
 def test_chunk_text_preserves_long_tails() -> None:
     long_body = "甲" * 500 + "乙" * 500 + "核心尾巴词"
     chunks = mod_match.chunk_text(long_body, size=500, overlap=80)
@@ -217,3 +262,52 @@ def test_validate_kit_templates_placeholders_and_pii(tmp_path: pathlib.Path) -> 
     ok_leak, msgs_leak = mod_val.validate_kit(clean_kit, strict=True)
     assert not ok_leak
     assert any("PII_OR_SECRET_RISK" in m for m in msgs_leak)
+
+
+def _kit_with(tmp_path: pathlib.Path, extra_line: str) -> tuple[bool, list[str]]:
+    """Build an otherwise-valid kit whose 02 file ends with `extra_line`, then validate it strictly."""
+    kit = tmp_path / "kit"
+    kit.mkdir()
+    body = "这是经过核实并亲口拍板的真实个人核心记录条目，用于测试验证完整性。"
+    for fname in mod_val.REQUIRED_KIT_FILES:
+        (kit / fname).write_text(f"# {fname}\n\n" + body * 3, encoding="utf-8")
+    (kit / "AGENTS.md").write_text((REPO_ROOT / "templates" / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8")
+    (kit / "02-核心判断准则.md").write_text(f"# 02\n\n{body * 3}\n{extra_line}", encoding="utf-8")
+    return mod_val.validate_kit(kit, strict=True)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        # GitHub tokens (classic PAT and fine-grained) used to slip through because only sk- was matched.
+        "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+        "github_pat_11ABCDEFG0123456789_abcdefghijklmnop",
+        # AWS access key id
+        "AKIAIOSFODNN7EXAMPLE",
+        # PRC mobile number
+        "联系电话 13812345678",
+        # PRC resident id (area + 1980-01-01 + seq + checksum)
+        "身份证 110101198001011234",
+    ],
+)
+def test_validate_kit_detects_common_pii_and_credentials(tmp_path: pathlib.Path, secret: str) -> None:
+    ok, msgs = _kit_with(tmp_path, secret)
+    assert not ok, f"expected leak to be flagged: {secret}"
+    assert any("PII_OR_SECRET_RISK" in m for m in msgs)
+
+
+@pytest.mark.parametrize(
+    "benign",
+    [
+        # Dates, versions, counts and long digit runs must never be mistaken for PII.
+        "日期 2026-11-22，版本 v1.2.3，共 1234567 条记录",
+        "长串数字 12345678901234567890",
+        "时间 138 秒，编号 NO.20260101",
+        "年份 2020 和 1999，月份 10-12",
+        # Legit absolute paths are fine; only the user-home segment is sensitive.
+        "路径 D:\\我的知识库\\raw\\ 与 E:\\vault\\notes",
+    ],
+)
+def test_validate_kit_does_not_false_positive_on_benign_numbers(tmp_path: pathlib.Path, benign: str) -> None:
+    ok, msgs = _kit_with(tmp_path, benign)
+    assert ok, f"benign content wrongly flagged: {benign} -> {msgs}"
