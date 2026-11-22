@@ -53,3 +53,18 @@ def test_no_fixed_download_path_claimed():
 def test_readme_points_to_afterchat():
     assert "AfterChat" in readme
     assert "589622" in readme
+
+
+def test_workbuddy_unverified_path_gated():
+    """Review B1 (PR-41): the WorkBuddy "设置 → 智能体 → 电脑操控/浏览器操控" menu
+    path has no first-hand evidence (no official doc URL, screenshot, or real operation
+    record). Any future mention of that product/menu in the guide MUST carry the
+    `UNVERIFIED` marker on the same line; otherwise it must not be written back as a
+    confirmed step.
+    """
+    unverified_tokens = ["WorkBuddy", "电脑操控", "浏览器操控"]
+    for line in doc.splitlines():
+        if any(tok in line for tok in unverified_tokens):
+            assert "UNVERIFIED" in line, (
+                f"未标注 UNVERIFIED 的 WorkBuddy 菜单指引被写回文档: {line.strip()}"
+            )
