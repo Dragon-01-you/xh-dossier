@@ -136,6 +136,7 @@ HAS_SOURCE_RE = re.compile(r"出处\s*[:：]\s*\S")
 SOURCE_REF_RE = re.compile(r"出处\s*[:：]\s*(?P<src>[^｜|]+)")
 QUOTE_TEXT_RE = re.compile(r"原文\s*[:：]\s*(?:「(?P<q1>.*?)」|“(?P<q2>.*?)”|\"(?P<q3>.*?)\"|'(?P<q4>.*?)')")
 SOURCE_LINE_RE = re.compile(r"^(?P<path>.*?):(?P<line>\d+)(?:-\d+)?$")
+_ABS_REF_RE = re.compile(r"^(?:[A-Za-z]:|[\\/])")
 # Issue #2 Bug C: natural-language uncertainty is the same unresolved claim as a
 # literal [待确认] marker. Keep the list narrow on purpose: broad words like
 # "模糊/不确定" occur in legitimate rules ("把模糊想法变清晰").
@@ -239,13 +240,23 @@ def _verify_pending_source(
     if sm:
         path_part = sm.group("path").strip()
         line_no = int(sm.group("line"))
-    candidates = [path_part]
-    p = pathlib.Path(path_part)
-    if not p.is_absolute():
-        candidates = [str(kit_dir / path_part)] + [
-            str(root / path_part) for root in (source_roots or [])
-        ]
-    target = next((pathlib.Path(c) for c in candidates if pathlib.Path(c).is_file()), None)
+    # Security: an explicit source must stay inside the kit dir or one of the
+    # caller-approved --source-root dirs. Reject absolute paths, drive letters,
+    # leading separators and `..` before touching the filesystem.
+    if _ABS_REF_RE.match(path_part) or ".." in pathlib.PurePath(path_part).parts:
+        return "PENDING_SOURCE_TRAVERSAL"
+    roots = [kit_dir, *(source_roots or [])]
+    target: pathlib.Path | None = None
+    for root in roots:
+        root_resolved = root.resolve()
+        candidate = (root_resolved / path_part).resolve()
+        try:
+            candidate.relative_to(root_resolved)
+        except ValueError:
+            return "PENDING_SOURCE_TRAVERSAL"
+        if candidate.is_file():
+            target = candidate
+            break
     if target is None:
         return "PENDING_SOURCE_MISSING"
     if line_no is not None:
@@ -257,8 +268,8 @@ def _verify_pending_source(
             # Allow ±1 line because exported chat files may put the same quote on
             # the adjacent line after a role/time prefix.
             window = "\n".join(rows[max(0, line_no - 2): min(len(rows), line_no + 1)])
-            norm_quote = re.sub(r"\s+", "", quote)
-            norm_window = re.sub(r"\s+", "", window)
+            norm_quote = re.sub(r"\s+", "", unicodedata.normalize("NFKC", quote))
+            norm_window = re.sub(r"\s+", "", unicodedata.normalize("NFKC", window))
             if norm_quote not in norm_window:
                 return "PENDING_SOURCE_QUOTE_MISMATCH"
     return ""
