@@ -260,7 +260,7 @@ def _build_evidence(records: list[Record], path: pathlib.Path) -> None:
         "",
     ]
     for i, r in enumerate(records, start=1):
-        r.evidence_line = i + 3  # 1-based line number of the record line
+        r.evidence_line = i + 4  # 1-based line number of the first record line
         lines.append(f"L{i:04d} | {r.rec_id} | {r.created_at} | user | {r.content}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
