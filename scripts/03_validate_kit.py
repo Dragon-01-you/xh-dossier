@@ -6,10 +6,22 @@ from __future__ import annotations
 
 import argparse
 import calendar
-import datetime
 import pathlib
 import re
 
+# Issue #2 scope map (this PR #39 closes Bug A + impossible dates only; strict semantics
+# are intentionally left unchanged here):
+#   - Bug A: cliché check skipped a whole line merely because it contained 禁止/严禁/...
+#     ........................................................ fixed here.
+#   - Impossible calendar dates (INVALID_DATE) ................ fixed here; hard fail in
+#     both strict and non-strict modes.
+#   - Bug B: strict fails on an unsourced `[待确认]`, conflicting with SKILL.md rule 4.
+#     ........................................................ handled on the #15 branch
+#     (feat/t15-citation-check; provenance-checked markers). Do NOT relax strict here.
+#   - Bug C: natural-language doubt with no literal `[待确认]` token ...... handled in
+#     PR #47 (feat/t2c-uncertain-prose; non-fatal UNCERTAIN_PROSE warning channel).
+# Merge order: #39 -> #47 -> #15. Merging #39 alone closes only Bug A + fake dates;
+# Bug B and Bug C stay open and issue #2 cannot be fully closed until #47 and #15 land.
 REQUIRED_KIT_FILES = [
     "AGENTS.md",
     "00-总入口索引.md",
@@ -109,6 +121,12 @@ SENSITIVE_PATH_RE = re.compile(
 # - A compliant marker: `[待确认] <疑点> ｜ 原文：「…」 ｜ 出处：<file>:<line>` -> INFO, never fails.
 # - B bare marker: no source/quote -> PENDING_UNTRACEABLE in strict mode.
 # - C meta-rule reference inside inline backticks or a fenced code block -> not counted.
+#
+# Bug B (issue #2): the strict failure on a bare marker conflicts with SKILL.md rule 4.
+# That conflict is NOT relaxed here; the provenance-checking fix lands on the #15 branch
+# (feat/t15-citation-check). Bug C: this scanner only matches the literal PENDING_TOKEN;
+# natural-language uncertainty (记不清 / 待核实 / 说不准 / ...) is detected by the
+# UNCERTAIN_PROSE channel in PR #47 (feat/t2c-uncertain-prose).
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 FENCE_RE = re.compile(r"^\s*```")
 PENDING_TOKEN = "[待确认]"

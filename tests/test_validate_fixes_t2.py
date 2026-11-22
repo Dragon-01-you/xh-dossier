@@ -71,3 +71,33 @@ def test_month_only_date_is_not_treated_as_impossible(tmp_path: pathlib.Path) ->
     kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 月份：2025-02"})
     ok, diags = vk.validate_kit(kit)
     assert ok is True, diags
+
+
+def test_impossible_dates_hard_fail_in_both_modes(tmp_path: pathlib.Path) -> None:
+    # Regression lock: 2/30, month 13, 2/31 must hard fail in non-strict AND strict.
+    # This gate must not be weakened later into a strict-only warning or a soft INFO.
+    for bad in ("2026-02-30", "2025-13-01", "2026-02-31"):
+        case_dir = tmp_path / bad.replace("-", "_")
+        case_dir.mkdir()
+        kit = make_kit(case_dir, {"01-身份与当前主线.md": f"- 事件日期：{bad}"})
+        for strict in (False, True):
+            ok, diags = vk.validate_kit(kit, strict=strict)
+            assert ok is False, (bad, strict, diags)
+            assert any("INVALID_DATE" in d and bad in d for d in diags), (bad, strict, diags)
+
+
+def test_cjk_impossible_date_hard_fails(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 事件日期：2026年2月30日"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False, diags
+    assert any("INVALID_DATE" in d and "2026年2月30日" in d for d in diags), diags
+
+
+def test_exact_cliche_bypass_phrase_is_caught(tmp_path: pathlib.Path) -> None:
+    # Issue #2 Bug A exact sample: banned phrase directly after 禁止说, no quotes around
+    # it. The rule verb must NOT exempt the cliché; CLICHE must fire in both modes.
+    kit = make_kit(tmp_path, {"AGENTS.md": "禁止说这是一个非常好的问题。"})
+    for strict in (False, True):
+        ok, diags = vk.validate_kit(kit, strict=strict)
+        assert ok is False, (strict, diags)
+        assert any("CLICHE" in d and "这是一个非常好的问题" in d for d in diags), (strict, diags)
