@@ -253,7 +253,9 @@ def build(args: argparse.Namespace) -> int:
         for step in (
             [sys.executable, "-X", "utf8", str(_script("05_temporal_index.py")), "--db", str(db), "--action", "backfill"],
             [sys.executable, "-X", "utf8", str(_script("06_graph_index.py")), "--db", str(db), "--action", "build", "--rebuild"],
-            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--limit", "5"],
+            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--since", "2026-01-01", "--limit", "5"],
+            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--entity", "Python", "--limit", "5"],
+            [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--keyword", str(args.query), "--limit", "5"],
         ):
             rc = _run(step)
             if rc != 0:
@@ -400,7 +402,7 @@ def main() -> int:
     p.add_argument("--kit", default=str(WORK / "kit"))
     p.add_argument("--l2", default=str(WORK / "layer2"))
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
-    p.add_argument("--query", default="记错")
+    p.add_argument("--query", default="项目", help="keyword used for the final FTS recall step")
     p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
     p.set_defaults(func=build)
 

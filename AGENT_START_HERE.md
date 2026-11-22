@@ -34,8 +34,12 @@ py -3.12 -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db -
 期望：
 
 ```text
-INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates=N -> VALIDATE_OK -> BUILD_OK
+INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates=N
+-> TEMPORAL_BACKFILL ... -> GRAPH_BUILD ...
+-> RECALL_OK temporal=N -> RECALL_OK graph=N -> RECALL_OK keyword=N
+-> VALIDATE_OK -> BUILD_OK
 ```
+`build` 默认会把三路检索也跑一遍；只要 `--skip-retrieval` 才跳过。三路都是辅助召回，不是 6 份档案的替代品。
 
 产物：
 - `work/kit/`：6 份档案 + `_evidence/chat-lines.md`（每条都带行号原文）
