@@ -687,6 +687,18 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
     for name, body in files.items():
         (out_dir / name).write_text(body.rstrip() + "\n", encoding="utf-8")
 
+    # A fresh `xh.py init` copies the template `04-正反例避坑账.md` first;
+    # bootstrap writes the real `04-反面案例清单.md`. Leaving both makes the
+    # validator read the unfilled template. Remove only the known template.
+    legacy = out_dir / "04-正反例避坑账.md"
+    if legacy.is_file():
+        try:
+            text = legacy.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        if "04 · 正反例避坑账" in text or "<写清具体场景" in text:
+            legacy.unlink()
+
     ok, messages = VALIDATOR.validate_kit(out_dir, strict=True)
     return {
         "records": len(records),
