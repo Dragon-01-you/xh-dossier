@@ -35,7 +35,7 @@
 ```
 
 ### Stage 1：结构化访谈立底盘（先人拍板，再查旧账）
-- **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，每次 3 个选择题，4~5 轮生成初稿。
+- **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，每次 3 个问题，**6 轮**生成初稿（6 轮分别对应 `AGENTS.md` + `00~04` 六份文件）。
 - **网页端用户**：复制 [prompts/01_web_ai_interviewer.md](prompts/01_web_ai_interviewer.md) 里的 10 行提示词直接发给豆包 / DeepSeek。
 
 ### Stage 2：多平台聊天记录导出（内置 ScriptCat 脚本猫向导 + 开关避坑）
