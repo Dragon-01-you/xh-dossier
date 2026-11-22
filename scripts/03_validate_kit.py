@@ -8,6 +8,7 @@ import argparse
 import calendar
 import pathlib
 import re
+import unicodedata
 
 # Issue #2 scope map (this PR #39 closes Bug A + impossible dates only; strict semantics
 # are intentionally left unchanged here):
@@ -45,7 +46,7 @@ _QUOTE_PAIRS = [
     ("‘", "’"), ("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"),
 ]
 _RULE_VERBS = ("禁止", "严禁", "不要说", "禁用水话", "别说", "禁止说", "禁止用", "严禁说", "不使用")
-_RULE_CONNECTORS = ("", "说", "用", "：", ":", " ")
+_RULE_CONNECTORS = ("", "说", "用", "写", "提", "出现", "输出", "：", ":", " ")
 
 _DATE_RE = re.compile(r"(?<!\d)(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?!\d)")
 _CJK_DATE_RE = re.compile(r"(20\d{2})年(\d{1,2})月(\d{1,2})日")
@@ -132,10 +133,19 @@ FENCE_RE = re.compile(r"^\s*```")
 PENDING_TOKEN = "[待确认]"
 HAS_QUOTE_RE = re.compile(r"原文\s*[:：]\s*\S")
 HAS_SOURCE_RE = re.compile(r"出处\s*[:：]\s*\S")
+SOURCE_REF_RE = re.compile(r"出处\s*[:：]\s*(?P<src>[^｜|]+)")
+QUOTE_TEXT_RE = re.compile(r"原文\s*[:：]\s*(?:「(?P<q1>.*?)」|“(?P<q2>.*?)”|\"(?P<q3>.*?)\"|'(?P<q4>.*?)')")
+SOURCE_LINE_RE = re.compile(r"^(?P<path>.*?):(?P<line>\d+)(?:-\d+)?$")
+# Issue #2 Bug C: natural-language uncertainty is the same unresolved claim as a
+# literal [待确认] marker. Keep the list narrow on purpose: broad words like
+# "模糊/不确定" occur in legitimate rules ("把模糊想法变清晰").
+UNCERTAIN_SEMANTIC_RE = re.compile(
+    r"(记不清|记不得|记不住|记混|待核实|待人工核实|未核实|说不准|拿不准|没印象|想不起来|可能记错|可能记混|不确定|有待确认)"
+)
 
 
-def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
-    """Return (compliant_count, bare_line_numbers, pending_line_numbers).
+def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int], list[int]]:
+    """Return (compliant_count, bare_line_numbers, pending_line_numbers, compliant_lines).
 
     Lines inside fenced code blocks and inline backtick spans are ignored (case C),
     matching the previous `` `[待确认]` `` meta-rule exemption. The pending line
@@ -144,6 +154,7 @@ def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
     compliant = 0
     bare_lines: list[int] = []
     pending_lines: set[int] = set()
+    compliant_lines: list[int] = []
     in_fence = False
     for lineno, line in enumerate(text.splitlines(), start=1):
         if FENCE_RE.match(line):
@@ -157,15 +168,107 @@ def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
         pending_lines.add(lineno)
         if HAS_QUOTE_RE.search(scan_line) and HAS_SOURCE_RE.search(scan_line):
             compliant += 1
+            compliant_lines.append(lineno)
         else:
             bare_lines.append(lineno)
-    return compliant, bare_lines, pending_lines
+    return compliant, bare_lines, pending_lines, compliant_lines
+
+
+def _scan_uncertain_semantics(text: str) -> list[int]:
+    """Return line numbers with natural-language uncertainty but no marker.
+
+    A line that already carries `[待确认]` is handled by the tri-state scanner;
+    the same claim must not be reported twice. Inline code / fences are ignored
+    so documentation examples do not fail a real kit.
+    """
+    hits: list[int] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        scan_line = INLINE_CODE_RE.sub("", line)
+        if PENDING_TOKEN in scan_line:
+            continue
+        # NFKC folds full-width forms; removing whitespace catches "待 核 实".
+        compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", scan_line))
+        if "不确定度" in compact:
+            # "保留不确定度词" is a rule about epistemic language, not a claim.
+            continue
+        if UNCERTAIN_SEMANTIC_RE.search(compact):
+            hits.append(lineno)
+    return hits
+
+
+def _quote_from_marker(line: str) -> str:
+    m = QUOTE_TEXT_RE.search(line)
+    if not m:
+        return ""
+    return next((v for v in m.groupdict().values() if v), "").strip()
+
+
+def _verify_pending_source(
+    line: str,
+    kit_dir: pathlib.Path,
+    source_roots: list[pathlib.Path] | None = None,
+) -> str:
+    """Return "" when the marker's source is verifiable, else a reason code.
+
+    Issue #15: previously only the literal words 原文/出处 were checked, so a
+    fabricated `出处：fake.md:999` passed. Now a local source must exist, the line
+    number must be in range, and the quoted text must appear near that line.
+    URLs are accepted as external references (clickable) but not fetched here.
+    Template shapes such as `<file>:<line>` stay exempt: they are documentation,
+    not a claim about a real file.
+    """
+    m = SOURCE_REF_RE.search(line)
+    if not m:
+        return "PENDING_SOURCE_MISSING"
+    src = m.group("src").strip().strip("`'\"“”「」[]() ")
+    if not src:
+        return "PENDING_SOURCE_MISSING"
+    if src.startswith("<") or "<file>" in src:
+        return ""
+    if src.startswith(("http://", "https://")):
+        return ""
+    line_no: int | None = None
+    path_part = src
+    sm = SOURCE_LINE_RE.match(src)
+    if sm:
+        path_part = sm.group("path").strip()
+        line_no = int(sm.group("line"))
+    candidates = [path_part]
+    p = pathlib.Path(path_part)
+    if not p.is_absolute():
+        candidates = [str(kit_dir / path_part)] + [
+            str(root / path_part) for root in (source_roots or [])
+        ]
+    target = next((pathlib.Path(c) for c in candidates if pathlib.Path(c).is_file()), None)
+    if target is None:
+        return "PENDING_SOURCE_MISSING"
+    if line_no is not None:
+        rows = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line_no < 1 or line_no > len(rows):
+            return "PENDING_SOURCE_LINE_OUT_OF_RANGE"
+        quote = _quote_from_marker(line)
+        if quote:
+            # Allow ±1 line because exported chat files may put the same quote on
+            # the adjacent line after a role/time prefix.
+            window = "\n".join(rows[max(0, line_no - 2): min(len(rows), line_no + 1)])
+            norm_quote = re.sub(r"\s+", "", quote)
+            norm_window = re.sub(r"\s+", "", window)
+            if norm_quote not in norm_window:
+                return "PENDING_SOURCE_QUOTE_MISMATCH"
+    return ""
 
 
 def validate_kit(
     target_dir: pathlib.Path,
     strict: bool = False,
     forbidden_terms: list[str] | None = None,
+    source_roots: list[pathlib.Path] | None = None,
 ) -> tuple[bool, list[str]]:
     """Return (passed, diagnostics) checking all 6 kit files under target_dir."""
     diagnostics: list[str] = []
@@ -210,12 +313,26 @@ def validate_kit(
 
         # `[待确认]` tri-state (CONFLICT-05): A compliant -> INFO; B bare -> fail;
         # C backtick/fence meta reference -> ignored by _scan_pending_markers.
-        compliant, bare_lines, pending_lines = _scan_pending_markers(text)
+        compliant, bare_lines, pending_lines, compliant_lines = _scan_pending_markers(text)
+        for lineno in compliant_lines:
+            raw_line = text.splitlines()[lineno - 1]
+            reason = _verify_pending_source(raw_line, target_dir, source_roots)
+            if reason:
+                diagnostics.append(f"{reason}: {fname}:{lineno}")
+                passed = False
+                compliant_total -= 1
         compliant_total += compliant
         for lineno in bare_lines:
             diagnostics.append(f"PENDING_UNTRACEABLE: {fname}:{lineno}")
             if strict:
                 passed = False
+
+        # Issue #2 Bug C: a claim written as "记不清 / 待核实 / 说不准" without a
+        # [待确认] marker is still unresolved. Fail in both modes so it cannot
+        # slip through as a finished fact.
+        for lineno in _scan_uncertain_semantics(text):
+            diagnostics.append(f"UNCERTAIN_SEMANTIC: {fname}:{lineno} (转成 [待确认] 并补原文/出处)")
+            passed = False
 
         # Pending marker shape lines are exempt from the placeholder check: the
         # documented shape uses `<疑点>` / `<file>:<line>`, which PLACEHOLDER_RE
@@ -246,9 +363,21 @@ def main() -> int:
         help="Fail on template placeholders or bare/untraceable [待确认]; compliant markers stay INFO",
     )
     parser.add_argument("--forbidden", nargs="*", default=[], help="Extra personal terms that must not appear")
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        default=[],
+        type=pathlib.Path,
+        help="额外目录：解析 [待确认] 的 出处：<file>:<line>（可多次传入）",
+    )
     args = parser.parse_args()
 
-    ok, msgs = validate_kit(args.target, strict=args.strict, forbidden_terms=args.forbidden)
+    ok, msgs = validate_kit(
+        args.target,
+        strict=args.strict,
+        forbidden_terms=args.forbidden,
+        source_roots=args.source_root,
+    )
     for m in msgs:
         print(m)
     print("VALIDATE_OK" if ok else "VALIDATE_FAIL")
