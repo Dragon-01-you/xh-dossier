@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import re
+import unicodedata
 
 REQUIRED_KIT_FILES = [
     "AGENTS.md",
@@ -16,6 +17,12 @@ REQUIRED_KIT_FILES = [
     "03-硬规则与表达黑话.md",
     "04-正反例避坑账.md",
 ]
+
+# Accepted aliases for required files: real-world kits may ship a renamed
+# sibling. Canonical name first; any present candidate satisfies the requirement.
+FILE_ALIASES: dict[str, list[str]] = {
+    "04-正反例避坑账.md": ["04-反面案例清单.md"],
+}
 
 AI_CLICHES = [
     "这是一个非常好的问题",
@@ -53,26 +60,128 @@ SENSITIVE_PATH_RE = re.compile(
 )
 
 
-# `[待确认]` tri-state scanning (CONFLICT-05 / issue #15):
-# - A compliant marker: `[待确认] <疑点> ｜ 原文：「…」 ｜ 出处：<file>:<line>` -> INFO, never fails.
-# - B bare marker: no source/quote -> PENDING_UNTRACEABLE in strict mode.
-# - C meta-rule reference inside inline backticks or a fenced code block -> not counted.
+# `[待确认]` provenance scanning (issue #15 / CONFLICT-05):
+# - A compliant marker: `[待确认] <疑点> ｜ 原文：「…」 ｜ 出处：<file>:<line>`
+#   whose cited file/line/quote really exist under the kit root -> INFO, never fails.
+# - B unsourced marker: no `出处：` / `原文：` label -> PENDING_UNSOURCED.
+# - C meta-rule reference inside inline backticks or a fenced code block -> ignored.
+# Citation defect codes:
+#   PENDING_SOURCE_TRAVERSAL  cited path escapes the kit root (absolute / `..` / drive)
+#   PENDING_SOURCE_MISSING    cited file does not exist under the kit root
+#   PENDING_LINE_OUT_OF_RANGE line number is below 1 or past the file's last line
+#   PENDING_QUOTE_MISMATCH    normalized quote is not found on the cited line
+PENDING_UNSOURCED = "PENDING_UNSOURCED"
+PENDING_SOURCE_TRAVERSAL = "PENDING_SOURCE_TRAVERSAL"
+PENDING_SOURCE_MISSING = "PENDING_SOURCE_MISSING"
+PENDING_LINE_OUT_OF_RANGE = "PENDING_LINE_OUT_OF_RANGE"
+PENDING_QUOTE_MISMATCH = "PENDING_QUOTE_MISMATCH"
+
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 FENCE_RE = re.compile(r"^\s*```")
 PENDING_TOKEN = "[待确认]"
-HAS_QUOTE_RE = re.compile(r"原文\s*[:：]\s*\S")
-HAS_SOURCE_RE = re.compile(r"出处\s*[:：]\s*\S")
+HAS_QUOTE_RE = re.compile(r"原文\s*[:：]")
+HAS_SOURCE_RE = re.compile(r"出处\s*[:：]")
+SOURCE_REF_RE = re.compile(r"出处\s*[:：]\s*(?P<ref>.+?)\s*(?:｜\s*|$)")
+QUOTE_REF_RE = re.compile(r"原文\s*[:：]\s*(?P<quote>.+?)\s*(?:｜\s*|$)")
+# `<file>:<line>` — last colon must carry a 1-based integer line number.
+REF_SPLIT_RE = re.compile(r"^(?P<file>.+):(?P<line>\d+)$")
+_ABSOLUTE_RE = re.compile(r"^(?:[A-Za-z]:|[\\/])")
+_WRAP_QUOTES = "「」『』“”‘’\"'"
 
 
-def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
-    """Return (compliant_count, bare_line_numbers, pending_line_numbers).
+def _normalize_citation_text(text: str) -> str:
+    """Normalize a quote / source line for comparison.
 
-    Lines inside fenced code blocks and inline backtick spans are ignored (case C),
-    matching the previous `` `[待确认]` `` meta-rule exemption. The pending line
-    numbers let the caller exempt marker shape lines from the placeholder check.
+    NFKC unifies full-width vs half-width glyphs and common quote variants;
+    surrounding CJK/ASCII wrap quotes are then stripped and all whitespace
+    (spaces, tabs, full-width space, newlines) removed.
     """
-    compliant = 0
-    bare_lines: list[int] = []
+    text = unicodedata.normalize("NFKC", text)
+    for ch in _WRAP_QUOTES:
+        text = text.replace(ch, "")
+    return re.sub(r"\s+", "", text)
+
+
+def _strip_wrap_quotes(text: str) -> str:
+    text = text.strip()
+    if len(text) >= 2 and text[0] in _WRAP_QUOTES and text[-1] in _WRAP_QUOTES:
+        text = text[1:-1]
+    return text.strip()
+
+
+def _strip_code_for_placeholders(line: str) -> str:
+    """Remove real inline code/path spans before the placeholder check.
+
+    A backtick span that opens with a `<...>` token is itself a template fill-in
+    placeholder and must stay visible; a span carrying a path or command (e.g.
+    `` `01-当前任务/<任务>/` ``) holds a runtime variable and is stripped.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        inner = match.group(0)[1:-1].strip()
+        if inner.startswith("<"):
+            return match.group(0)
+        return ""
+
+    return INLINE_CODE_RE.sub(_sub, line)
+
+
+def _check_citation(kit_root: pathlib.Path, ref: str, quote: str) -> str | None:
+    """Verify the cited file/line/quote really exist under the kit root.
+
+    Return an error code, or ``None`` when the citation checks out.
+    """
+    ref = ref.strip()
+    if not ref:
+        return PENDING_SOURCE_MISSING
+
+    # Reject absolute paths, drive letters, leading separators outright (traversal).
+    if _ABSOLUTE_RE.match(ref):
+        return PENDING_SOURCE_TRAVERSAL
+
+    match = REF_SPLIT_RE.match(ref)
+    if not match:
+        # Cannot parse as <file>:<line> — the provenance is unusable.
+        return PENDING_SOURCE_MISSING
+
+    rel_file = match.group("file").strip()
+    line_no = int(match.group("line"))
+
+    # Defense in depth: reject explicit `..` segments even if resolution would stay inside root.
+    if ".." in pathlib.PurePath(rel_file).parts:
+        return PENDING_SOURCE_TRAVERSAL
+
+    root = kit_root.resolve()
+    candidate = (root / rel_file).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return PENDING_SOURCE_TRAVERSAL
+
+    if not candidate.is_file():
+        return PENDING_SOURCE_MISSING
+
+    source_lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+    if line_no < 1 or line_no > len(source_lines):
+        return PENDING_LINE_OUT_OF_RANGE
+
+    if _normalize_citation_text(quote) not in _normalize_citation_text(source_lines[line_no - 1]):
+        return PENDING_QUOTE_MISMATCH
+
+    return None
+
+
+def _scan_pending_markers(
+    text: str, kit_root: pathlib.Path
+) -> tuple[list[dict[str, object]], set[int]]:
+    """Scan `[待确认]` markers and verify each one's provenance.
+
+    Lines inside fenced code blocks and inline backtick spans are ignored (meta-rule
+    references), matching the previous `` `[待确认]` `` exemption. Returns
+    ``(records, pending_lines)`` where each record carries ``lineno`` and ``error``
+    (``None`` when the marker is compliant).
+    """
+    records: list[dict[str, object]] = []
     pending_lines: set[int] = set()
     in_fence = False
     for lineno, line in enumerate(text.splitlines(), start=1):
@@ -85,11 +194,19 @@ def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
         if PENDING_TOKEN not in scan_line:
             continue
         pending_lines.add(lineno)
-        if HAS_QUOTE_RE.search(scan_line) and HAS_SOURCE_RE.search(scan_line):
-            compliant += 1
+
+        error: str | None
+        if not HAS_QUOTE_RE.search(scan_line) or not HAS_SOURCE_RE.search(scan_line):
+            error = PENDING_UNSOURCED
         else:
-            bare_lines.append(lineno)
-    return compliant, bare_lines, pending_lines
+            ref_match = SOURCE_REF_RE.search(scan_line)
+            quote_match = QUOTE_REF_RE.search(scan_line)
+            ref = ref_match.group("ref") if ref_match else ""
+            quote = _strip_wrap_quotes(quote_match.group("quote")) if quote_match else ""
+            error = _check_citation(kit_root, ref, quote)
+
+        records.append({"lineno": lineno, "error": error})
+    return records, pending_lines
 
 
 def validate_kit(
@@ -105,12 +222,17 @@ def validate_kit(
     passed = True
     compliant_total = 0
 
-    for fname in REQUIRED_KIT_FILES:
-        fpath = target_dir / fname
-        if not fpath.is_file():
-            diagnostics.append(f"MISSING required file: {fname}")
+    for canonical in REQUIRED_KIT_FILES:
+        candidates = [canonical, *FILE_ALIASES.get(canonical, [])]
+        fpath = next(
+            (target_dir / name for name in candidates if (target_dir / name).is_file()),
+            None,
+        )
+        if fpath is None:
+            diagnostics.append(f"MISSING required file: {canonical}")
             passed = False
             continue
+        fname = fpath.name
         text = fpath.read_text(encoding="utf-8", errors="replace").strip()
         if len(text) < 80:
             diagnostics.append(f"TOO_SHORT (<80 chars): {fname} ({len(text)} chars)")
@@ -135,14 +257,19 @@ def validate_kit(
                     diagnostics.append(f"FORBIDDEN_PII_TERM '{term}' found in {fname}")
                     passed = False
 
-        # `[待确认]` tri-state (CONFLICT-05): A compliant -> INFO; B bare -> fail;
-        # C backtick/fence meta reference -> ignored by _scan_pending_markers.
-        compliant, bare_lines, pending_lines = _scan_pending_markers(text)
-        compliant_total += compliant
-        for lineno in bare_lines:
-            diagnostics.append(f"PENDING_UNTRACEABLE: {fname}:{lineno}")
-            if strict:
-                passed = False
+        # `[待确认]` provenance check (issue #15): compliant -> INFO;
+        # unsourced / bad citation -> defect (fails under --strict); backtick/fence
+        # meta references are ignored by _scan_pending_markers.
+        records, pending_lines = _scan_pending_markers(text, target_dir)
+        for record in records:
+            lineno = int(record["lineno"])
+            error = record["error"]
+            if error is None:
+                compliant_total += 1
+            else:
+                diagnostics.append(f"{error}: {fname}:{lineno}")
+                if strict:
+                    passed = False
 
         # Pending marker shape lines are exempt from the placeholder check: the
         # documented shape uses `<疑点>` / `<file>:<line>`, which PLACEHOLDER_RE
@@ -151,7 +278,7 @@ def validate_kit(
         for lineno, line in enumerate(text.splitlines(), start=1):
             if lineno in pending_lines:
                 continue
-            placeholders.extend(PLACEHOLDER_RE.findall(line))
+            placeholders.extend(PLACEHOLDER_RE.findall(_strip_code_for_placeholders(line)))
         if strict and placeholders:
             diagnostics.append(f"UNFILLED placeholders in {fname}: {placeholders[:5]}")
             passed = False
@@ -170,7 +297,7 @@ def main() -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail on template placeholders or bare/untraceable [待确认]; compliant markers stay INFO",
+        help="Fail on template placeholders or unsourced/invalid [待确认]; compliant markers stay INFO",
     )
     parser.add_argument("--forbidden", nargs="*", default=[], help="Extra personal terms that must not appear")
     args = parser.parse_args()
