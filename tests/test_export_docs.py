@@ -50,6 +50,11 @@ def test_no_fixed_download_path_claimed():
     assert "D:\\eage下载" not in doc
 
 
+def test_no_unverified_workbuddy_menu_path():
+    # Review B1: the WorkBuddy menu path had no first-hand evidence.
+    assert "WorkBuddy" not in doc
+
+
 def test_readme_points_to_afterchat():
     assert "AfterChat" in readme
     assert "589622" in readme
