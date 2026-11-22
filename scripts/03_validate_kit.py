@@ -10,19 +10,16 @@ import pathlib
 import re
 import unicodedata
 
-# Issue #2 scope map (this PR #39 closes Bug A + impossible dates only; strict semantics
-# are intentionally left unchanged here):
-#   - Bug A: cliché check skipped a whole line merely because it contained 禁止/严禁/...
-#     ........................................................ fixed here.
-#   - Impossible calendar dates (INVALID_DATE) ................ fixed here; hard fail in
-#     both strict and non-strict modes.
-#   - Bug B: strict fails on an unsourced `[待确认]`, conflicting with SKILL.md rule 4.
-#     ........................................................ handled on the #15 branch
-#     (feat/t15-citation-check; provenance-checked markers). Do NOT relax strict here.
-#   - Bug C: natural-language doubt with no literal `[待确认]` token ...... handled in
-#     PR #47 (feat/t2c-uncertain-prose; non-fatal UNCERTAIN_PROSE warning channel).
-# Merge order: #39 -> #47 -> #15. Merging #39 alone closes only Bug A + fake dates;
-# Bug B and Bug C stay open and issue #2 cannot be fully closed until #47 and #15 land.
+# Issue #2 / #15 scope (all merged on main):
+#   - Bug A: cliché check no longer skips a whole line merely because it contains
+#     禁止/严禁/...; only an intentional quoted example after a rule verb is exempt.
+#   - Impossible calendar dates (INVALID_DATE) hard-fail in both modes.
+#   - Bug B: an unsourced/bare `[待确认]` fails under --strict (PENDING_UNTRACEABLE);
+#     a compliant marker stays INFO.
+#   - Bug C: natural-language doubt without a literal marker (记不清/待核实/说不准...)
+#     hard-fails in both modes as UNCERTAIN_SEMANTIC.
+#   - #15: a cited source must resolve inside the kit dir or an explicitly approved
+#     --source-root; absolute/drive-letter/`..` citations are traversal and fail.
 REQUIRED_KIT_FILES = [
     "AGENTS.md",
     "00-总入口索引.md",
@@ -31,6 +28,20 @@ REQUIRED_KIT_FILES = [
     "03-硬规则与表达黑话.md",
     "04-正反例避坑账.md",
 ]
+
+# Real user kits often name the fourth file 04-反面案例清单.md. Accept that
+# spelling without weakening the six-file contract or the output filenames.
+KIT_FILE_ALIASES = {
+    "04-正反例避坑账.md": ["04-正反例避坑账.md", "04-反面案例清单.md"],
+}
+
+
+def find_kit_file(target_dir: pathlib.Path, canonical: str) -> pathlib.Path | None:
+    for name in KIT_FILE_ALIASES.get(canonical, [canonical]):
+        candidate = target_dir / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 AI_CLICHES = [
     "这是一个非常好的问题",
@@ -93,6 +104,10 @@ def _invalid_calendar_dates(text: str) -> list[str]:
 # ASCII (<YYYY-MM>, <your_name>, <TODO>). Exclude real autolinks such as
 # <https://example.com> and <mailto:...>.
 PLACEHOLDER_RE = re.compile(r"<(?!(?:https?://|mailto:))[^>\n]{2,100}>")
+# Runtime variables such as `<任务>` / `<项目>` / `<日期>` / `<分支>` are semantic
+# slots, not unfilled template fields. Keep them visible to users, but do not fail
+# strict validation for them.
+RUNTIME_VAR_RE = re.compile(r"<(?:任务|项目|日期|分支)>")
 # Detect accidentally leaked local user paths or secrets outside sanitized sample examples.
 # Each pattern is anchored on a format that is unambiguous in prose, to keep false
 # positives near zero on real Chinese kit files (dates, versions, counts must not fire).
@@ -141,7 +156,7 @@ _ABS_REF_RE = re.compile(r"^(?:[A-Za-z]:|[\\/])")
 # literal [待确认] marker. Keep the list narrow on purpose: broad words like
 # "模糊/不确定" occur in legitimate rules ("把模糊想法变清晰").
 UNCERTAIN_SEMANTIC_RE = re.compile(
-    r"(记不清|记不得|记不住|记混|待核实|待人工核实|未核实|说不准|拿不准|没印象|想不起来|可能记错|可能记混|不确定|有待确认)"
+    r"(记不清|记不得|记不住|记混|待核实|待人工核实|未核实|说不准|拿不准|没印象|想不起来|可能记错|可能记混|我不确定|我拿不准)"
 )
 
 
@@ -289,12 +304,13 @@ def validate_kit(
     passed = True
     compliant_total = 0
 
-    for fname in REQUIRED_KIT_FILES:
-        fpath = target_dir / fname
-        if not fpath.is_file():
-            diagnostics.append(f"MISSING required file: {fname}")
+    for canonical in REQUIRED_KIT_FILES:
+        fpath = find_kit_file(target_dir, canonical)
+        if fpath is None:
+            diagnostics.append(f"MISSING required file: {canonical}")
             passed = False
             continue
+        fname = fpath.name
         text = fpath.read_text(encoding="utf-8", errors="replace").strip()
         if len(text) < 80:
             diagnostics.append(f"TOO_SHORT (<80 chars): {fname} ({len(text)} chars)")
@@ -352,7 +368,7 @@ def validate_kit(
         for lineno, line in enumerate(text.splitlines(), start=1):
             if lineno in pending_lines:
                 continue
-            placeholders.extend(PLACEHOLDER_RE.findall(line))
+            placeholders.extend(PLACEHOLDER_RE.findall(RUNTIME_VAR_RE.sub("", line)))
         if strict and placeholders:
             diagnostics.append(f"UNFILLED placeholders in {fname}: {placeholders[:5]}")
             passed = False
