@@ -61,7 +61,7 @@ def _records_from_json_obj(data: Any, source_name: str) -> list[dict[str, str]]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        ts = str(item.get("created_at") or item.get("timestamp") or item.get("create_time") or item.get("date") or "unknown")
+        ts = str(item.get("created_at") or item.get("timestamp") or item.get("create_time") or item.get("date") or item.get("time") or "unknown")
 
         # Handle ChatGPT official `mapping` node tree format
         if isinstance(item.get("mapping"), dict):
@@ -94,7 +94,7 @@ def _records_from_json_obj(data: Any, source_name: str) -> list[dict[str, str]]:
                 if len(body) >= 4:
                     rows.append({
                         "source_file": source_name,
-                        "created_at": str(m.get("created_at") or m.get("timestamp") or ts),
+                        "created_at": str(m.get("created_at") or m.get("timestamp") or m.get("time") or ts),
                         "role": str(m.get("role") or "user"),
                         "content": body,
                     })
