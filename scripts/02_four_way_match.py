@@ -344,6 +344,10 @@ def main() -> int:
     args = parser.parse_args()
 
     report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    if report["records"] == 0:
+        print("FOUR_WAY_EMPTY: 数据库里没有可匹配的原文记录（records=0）。")
+        print("请先运行 scripts/01_clean_and_index.py 并确认 raw/ 里确实有导出的对话文件，不要把空报告当成跑通。")
+        return 2
     md = render_backfill_markdown(report)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(md, encoding="utf-8")

@@ -291,7 +291,23 @@ def main() -> int:
     parser.add_argument("--query", default="", help="Optional test keyword query after indexing")
     args = parser.parse_args()
 
+    # A naive first run often has an empty or mistyped raw/ folder. A traceback
+    # (or a green "INDEX_OK indexed=0") is indistinguishable from success and
+    # sends the user into an empty four-way report. Fail loudly with the next
+    # action instead.
+    if not args.raw.is_dir():
+        print(f"RAW_DIR_NOT_FOUND: {args.raw}")
+        print("请先完成 Stage 2：把导出的 .md/.json/.jsonl/.txt 放进 raw/ 目录（参考 docs/02-multi-platform-export.md）。")
+        return 2
+
     stats = clean_and_index(args.raw, args.db)
+    if stats["indexed"] == 0:
+        print(
+            f"INDEX_EMPTY: 未在 {args.raw} 找到可索引的 .json/.jsonl/.md/.txt 记录"
+            f"（total_raw={stats['total_raw']}）。"
+        )
+        print("不要把 indexed=0 当成成功；请检查导出文件是否真的落地，或先运行 scripts/00_export_wizard.py。")
+        return 2
     print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
     if args.query:
         hits = search_keyword(args.db, args.query)

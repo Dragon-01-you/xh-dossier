@@ -217,3 +217,66 @@ def test_validate_kit_templates_placeholders_and_pii(tmp_path: pathlib.Path) -> 
     ok_leak, msgs_leak = mod_val.validate_kit(clean_kit, strict=True)
     assert not ok_leak
     assert any("PII_OR_SECRET_RISK" in m for m in msgs_leak)
+
+
+def test_cli_missing_raw_dir_fails_with_actionable_message(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "missing.db"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["01_clean_and_index.py", "--raw", str(tmp_path / "does-not-exist"), "--db", str(db_path)],
+    )
+
+    code = mod_clean.main()
+    out = capsys.readouterr().out
+
+    assert code == 2
+    assert "RAW_DIR_NOT_FOUND" in out
+    assert "docs/02-multi-platform-export.md" in out
+    assert "Traceback" not in out
+    assert not db_path.exists()
+
+
+def test_cli_empty_raw_dir_does_not_report_green_success(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw_dir = tmp_path / "empty_raw"
+    raw_dir.mkdir()
+    db_path = tmp_path / "empty.db"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["01_clean_and_index.py", "--raw", str(raw_dir), "--db", str(db_path)],
+    )
+
+    code = mod_clean.main()
+    out = capsys.readouterr().out
+
+    assert code == 2
+    assert "INDEX_EMPTY" in out
+    assert "INDEX_OK" not in out
+    assert "不要把 indexed=0 当成成功" in out
+
+
+def test_cli_empty_database_does_not_write_fake_backfill_report(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw_dir = tmp_path / "empty_raw"
+    raw_dir.mkdir()
+    db_path = tmp_path / "empty.db"
+    mod_clean.clean_and_index(raw_dir, db_path)
+    out_path = tmp_path / "backfill.md"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["02_four_way_match.py", "--db", str(db_path), "--out", str(out_path)],
+    )
+
+    code = mod_match.main()
+    out = capsys.readouterr().out
+
+    assert code == 2
+    assert "FOUR_WAY_EMPTY" in out
+    assert not out_path.exists()
