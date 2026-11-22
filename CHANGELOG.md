@@ -2,6 +2,18 @@
 
 本文件只记录**真实合并、真实跑通**的变更。未验证的计划不写进来。
 
+## 0.2.0-rc.4 — 2026-11-23
+
+### 收紧机器初稿噪声（真实 729 复跑）
+- `04_bootstrap_kit.py`：候选句跳过列表编号、对话式排障（“你等一下/你这里/怎么回事”）；反例只保留强负面结果，不再把“问题”二字当反例。
+- `05_deep_backfill.py --broad`：判断/反例 cue 去掉“先/再/核心/关键”“问题/坑”等过宽词；broad 候选必须落到一句 20–220 字的原话，并跳过请求/命令句。
+- 真实 59 导出 / 729 条：`identity=4 mainline=3 principles=0 rules=8 negative=2 positive=4`；二层 broad 候选从 35 降到 1，且该条是真实身份自述（3D 可视化项目），不是请求或歌词。
+- 最新代码完整三路复跑：`TEMPORAL_BACKFILL 729 / unknown=692`、`GRAPH_BUILD edges=1149`、三路分别 `temporal=5 / graph=5 / keyword=5`、`VALIDATE_OK`、`BUILD_OK`。
+
+### 说明
+- `principles=0` 是诚实留空：规则法找不到“本人判断准则”的完整声明句，不拿提示词凑数；`04` 的正例/反例仍可读。
+- `BUILD_OK` 仍不等于可交付；接手 Agent 必须按 `AGENT_START_HERE.md` 做逐条复核。
+
 ## 0.2.0-rc.3 — 2026-11-23
 
 ### 新增：从混乱聊天直接生成 6 份初稿
