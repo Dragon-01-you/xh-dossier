@@ -1,10 +1,10 @@
 # xh-dossier 检索第③④层落地任务书
 
 > 调研日期：2026-11-22 ｜ 性质：Read-only 调研 + 可执行任务书（**本次不改项目代码**）
-> 目标项目：`E:/项目工作区/test-xh-dossier`
-> 交付物：本文件 `E:/个人知识库/outputs/检索第3-4层落地任务书.md`
+> 目标项目：`<repo>`
+> 交付物：本文件 `<outputs>/检索第3-4层落地任务书.md`
 >
-> **标注约定**：`[代码确认]` = 已读 `E:/项目工作区/test-xh-dossier` 源码/数据库确认；
+> **标注约定**：`[代码确认]` = 已读 `<repo>` 源码/数据库确认；
 > `[源码确认]` = 已从项目 GitHub 原始源码文件确认；`[一手文档]` = 已从项目官方 README/论文/官方博客确认；
 > `[二手推断]` = 来自第三方解读文章或本人推断，**未经一手资料证实**。
 
@@ -139,7 +139,7 @@ Zep 官方给出的查询侧表述：*"Point-in-time reasoning. 'What was the us
   - `render_backfill_markdown(report) -> str` 输出 `[REC-xxxx | 日期]` 可追溯报告。
 - 现状：**①已实现，②已实现（仅候选召回），③④未实现**。四路里的"四路"是关键词/向量/聚类/模式，**不是**用户框架的①-④。`[代码确认]`
 - 可复用资产：`apply_guardrails(content, pattern_kind)` 用于③抽取的否定/主宾误报拦截；`chunk_text` 用于长文本；`cosine_sim` / `_l2_normalize_dict` 用于简化图边打分。
-- 测试基线：`tests/test_pipeline.py` 现有 9 个测试（pytest），新增测试不得破坏它。
+- 测试基线：`tests/test_pipeline.py` 既有套件（pytest），新增测试不得破坏它。
 
 ---
 
@@ -285,11 +285,11 @@ python scripts/06_graph_index.py --db work/real_index.db --action neighbors --en
 | 8 | `test_graph_extraction_respects_negation_guardrail` | `"先不要…改成…"` 经 `extract_relations` 产出 0 条边 | ③防误报 |
 | 9 | `test_graph_neighbors_one_hop_and_provenance` | build 后 `graph_neighbors(name,hops=1)` 返回 ≥1 条，且每条 `rec_id` 都能在 `records` 命中 | ③可追溯 |
 | 10 | `test_as_of_filter_on_graph_edges` | 传入 `as_of` 早于边 `valid_from` 时返回空 | ③④联动 |
-| 11 | `test_no_regression_existing_pipeline` | `pytest -q tests/test_pipeline.py` 全绿（9 passed） | 不破坏旧功能 |
+| 11 | `test_no_regression_existing_pipeline` | `pytest -q tests/test_pipeline.py` 全绿 | 不破坏旧功能 |
 
 **整体验收命令**：
 ```bash
-cd "E:/项目工作区/test-xh-dossier"
+cd "<repo>"
 python -m pytest -q tests/test_temporal_graph.py tests/test_pipeline.py
 ```
 通过标准：全部 passed；且对 `work/real_index.db` 执行 `--action backfill` 后 `fact_validity` 行数 == `records` 中可解析日期的行数 ≤ 729。
@@ -380,7 +380,7 @@ python -m pytest -q tests/test_temporal_graph.py tests/test_pipeline.py
 - https://tianpan.co/zh/blog/2026-07-02-your-agents-memory-needs-two-clocks
 
 **本地代码（已读）**
-- `E:/项目工作区/test-xh-dossier/scripts/01_clean_and_index.py`
-- `E:/项目工作区/test-xh-dossier/scripts/02_four_way_match.py`
-- `E:/项目工作区/test-xh-dossier/tests/test_pipeline.py`
-- `E:/项目工作区/test-xh-dossier/work/real_index.db`（只读查询）
+- `<repo>/scripts/01_clean_and_index.py`
+- `<repo>/scripts/02_four_way_match.py`
+- `<repo>/tests/test_pipeline.py`
+- `<repo>/work/real_index.db`（只读查询）
