@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Any
 
+from event_time import detect_event_time
+
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
 
@@ -223,7 +225,9 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
                 created_at TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                md5 TEXT NOT NULL UNIQUE
+                md5 TEXT NOT NULL UNIQUE,
+                event_date TEXT NOT NULL DEFAULT '',
+                date_kind TEXT NOT NULL DEFAULT 'stated'
             )
             """
         )
@@ -256,9 +260,15 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
                 seen_md5.add(digest)
                 indexed += 1
                 rec_id = f"REC-{indexed:04d}"
+                # Issue #10: separate event time (T) from mention time (T').
+                event_date, date_kind, _marker = detect_event_time(
+                    item["content"], item["created_at"]
+                )
                 con.execute(
-                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5) VALUES (?, ?, ?, ?, ?, ?)",
-                    (rec_id, item["source_file"], item["created_at"], item["role"], item["content"], digest),
+                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5, event_date, date_kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rec_id, item["source_file"], item["created_at"], item["role"], item["content"], digest,
+                     event_date, date_kind),
                 )
                 con.execute("INSERT INTO records_fts (rec_id, content) VALUES (?, ?)", (rec_id, item["content"]))
 
