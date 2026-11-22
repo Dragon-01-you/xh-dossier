@@ -127,4 +127,5 @@ description: "通过结构化 6 轮访谈（每轮 3 题，A/B/C 选择优先）
    ```bash
    python -X utf8 scripts/03_validate_kit.py --target my-onboarding/ --strict
    ```
+   - `UNCERTAIN_PROSE` 告警表示条目用自然语言写了存疑（记不清 / 待核实 / 说不准 / 大概 / 可能记错 / 好像 等），默认只警告不失败；交付定稿要求零存疑时，加 `--fail-on-uncertain-prose`，把这些条目转正、标 `[待确认]` 或用 `--uncertain-prose-ignore <子串>` 豁免已知误报。
 3. 指引用户进入 Stage 2（按 `docs/02-multi-platform-export.md` 开好浏览器脚本猫开关导出原件进 `raw/`）和 Stage 3（运行 `01_clean_and_index.py` + `02_four_way_match.py` 回填核对 `[待确认]`）。

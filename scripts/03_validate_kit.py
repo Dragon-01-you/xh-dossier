@@ -9,6 +9,7 @@ import calendar
 import datetime
 import pathlib
 import re
+import unicodedata
 
 REQUIRED_KIT_FILES = [
     "AGENTS.md",
@@ -144,10 +145,102 @@ def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
     return compliant, bare_lines, pending_lines
 
 
+# Issue #2 Bug C: natural-language uncertainty prose. The literal `[待确认]`
+# marker only catches one surface form; a kit that writes the same doubt in
+# prose ("记不清当时到底有没有发出去") used to pass both strict and
+# non-strict. This channel reports NON-FATAL warnings: during the collection
+# phase uncertainty is expected; the delivery phase can upgrade them to
+# failures with `--fail-on-uncertain-prose`.
+UNCERTAIN_PROSE_TERMS = [
+    "记不清",
+    "记不得",
+    "记不住",
+    "待核实",
+    "未核实",
+    "说不准",
+    "不确定",
+    "可能记错",
+    "大概",
+    "印象里",
+    "好像",
+    "忘了细节",
+    "有待确认",
+]
+
+# Heuristic negation / already-confirmed contexts: a term sitting right after
+# one of these is a closed statement, not an open doubt ("不是不确定",
+# "已核实，不存在不确定"). Deliberately narrow; README documents what the
+# heuristic does not cover, and `--uncertain-prose-ignore` gives line-level
+# overrides for residual false positives.
+_UNCERTAIN_NEGATION_PREFIXES = (
+    "不是", "并非", "并不", "不算", "没有", "不存在",
+    "已核实", "已确认", "排除", "无",
+)
+
+# Compounds where the hedge is only a substring of a technical term:
+# "不确定度" (degree of uncertainty) is not a doubt hedge.
+_COMPOUND_TAIL_EXCLUDE = {"不确定": ("度",)}
+
+
+def _normalize_for_prose(text: str) -> str:
+    """Fold full-width forms to half-width (NFKC) and strip all whitespace.
+
+    Lets spaced or full-width variants such as "待 核 实" / "待　核　实" match
+    the normalized term list; matching runs against the normalized text while
+    the original line is still reported verbatim.
+    """
+    folded = unicodedata.normalize("NFKC", text)
+    return re.sub(r"\s+", "", folded)
+
+
+def _is_negated_uncertainty(normalized: str, idx: int) -> bool:
+    """True if the hit sits inside a narrow negation/confirmation window."""
+    window = normalized[max(0, idx - 4):idx]
+    return any(prefix in window for prefix in _UNCERTAIN_NEGATION_PREFIXES)
+
+
+def scan_uncertain_prose(
+    text: str, whitelist: list[str] | None = None
+) -> list[dict[str, object]]:
+    """Return hits: {"lineno", "term", "line"} for natural-language doubt.
+
+    Fenced code blocks and inline backtick spans are skipped, matching the
+    pending-marker scan. A line containing any whitelist substring is exempt.
+    One hit per line keeps the report readable.
+    """
+    whitelist = whitelist or []
+    hits: list[dict[str, object]] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        scan_line = INLINE_CODE_RE.sub("", line)
+        if any(entry and entry in scan_line for entry in whitelist):
+            continue
+        normalized = _normalize_for_prose(scan_line)
+        for term in UNCERTAIN_PROSE_TERMS:
+            idx = normalized.find(_normalize_for_prose(term))
+            if idx == -1:
+                continue
+            if _is_negated_uncertainty(normalized, idx):
+                continue
+            tail = normalized[idx + len(term): idx + len(term) + 1]
+            if tail in _COMPOUND_TAIL_EXCLUDE.get(term, ()):
+                continue
+            hits.append({"lineno": lineno, "term": term, "line": line.strip()})
+            break
+    return hits
+
+
 def validate_kit(
     target_dir: pathlib.Path,
     strict: bool = False,
     forbidden_terms: list[str] | None = None,
+    fail_on_uncertain_prose: bool = False,
+    uncertain_prose_whitelist: list[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Return (passed, diagnostics) checking all 6 kit files under target_dir."""
     diagnostics: list[str] = []
@@ -156,6 +249,7 @@ def validate_kit(
 
     passed = True
     compliant_total = 0
+    uncertain_total = 0
 
     for fname in REQUIRED_KIT_FILES:
         fpath = target_dir / fname
@@ -199,6 +293,19 @@ def validate_kit(
             if strict:
                 passed = False
 
+        # Issue #2 Bug C: natural-language uncertainty (UNCERTAIN_PROSE).
+        # Non-fatal warning even under --strict; the delivery phase upgrades
+        # these to failures via fail_on_uncertain_prose.
+        prose_hits = scan_uncertain_prose(text, uncertain_prose_whitelist)
+        uncertain_total += len(prose_hits)
+        for hit in prose_hits:
+            diagnostics.append(
+                f"UNCERTAIN_PROSE: {fname}:{hit['lineno']} "
+                f"命中“{hit['term']}”｜原文：{hit['line']}"
+            )
+            if fail_on_uncertain_prose:
+                passed = False
+
         # Pending marker shape lines are exempt from the placeholder check: the
         # documented shape uses `<疑点>` / `<file>:<line>`, which PLACEHOLDER_RE
         # would otherwise flag as unfilled on an otherwise compliant marker.
@@ -216,6 +323,12 @@ def validate_kit(
             f"INFO: {compliant_total} compliant '[待确认]' marker(s) pending backfill confirmation."
         )
 
+    if uncertain_total > 0:
+        diagnostics.append(
+            f"WARN: {uncertain_total} line(s) carry natural-language uncertainty; "
+            f"tag the fact with [待确认] or verify against source before delivery."
+        )
+
     return passed, diagnostics
 
 
@@ -228,9 +341,26 @@ def main() -> int:
         help="Fail on template placeholders or bare/untraceable [待确认]; compliant markers stay INFO",
     )
     parser.add_argument("--forbidden", nargs="*", default=[], help="Extra personal terms that must not appear")
+    parser.add_argument(
+        "--fail-on-uncertain-prose",
+        action="store_true",
+        help="Delivery phase: fail on UNCERTAIN_PROSE warnings; by default they stay non-fatal even under --strict",
+    )
+    parser.add_argument(
+        "--uncertain-prose-ignore",
+        nargs="*",
+        default=[],
+        help="Substrings that exempt a line from UNCERTAIN_PROSE (false-positive overrides)",
+    )
     args = parser.parse_args()
 
-    ok, msgs = validate_kit(args.target, strict=args.strict, forbidden_terms=args.forbidden)
+    ok, msgs = validate_kit(
+        args.target,
+        strict=args.strict,
+        forbidden_terms=args.forbidden,
+        fail_on_uncertain_prose=args.fail_on_uncertain_prose,
+        uncertain_prose_whitelist=args.uncertain_prose_ignore,
+    )
     for m in msgs:
         print(m)
     print("VALIDATE_OK" if ok else "VALIDATE_FAIL")
