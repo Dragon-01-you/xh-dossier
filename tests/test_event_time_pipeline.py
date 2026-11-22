@@ -61,9 +61,9 @@ def test_event_date_and_date_kind_are_persisted(tmp_path: pathlib.Path) -> None:
     assert now["date_kind"] == "stated"
 
     # Assistant prose must not be treated as the user's memory, even when it
-    # contains retrospective words like "以前".
+    # contains retrospective words like "以前". It gets no event date at all.
     assistant = [r for r in rows if r["content"].startswith("这确实是很早以前")][0]
-    assert assistant["event_date"] == "2026-11-22"
+    assert assistant["event_date"] == ""
     assert assistant["date_kind"] == "unknown"
 
     anchored = [r for r in rows if r["content"] == "记得 2025-09-20 我砍掉了闲鱼副业"][0]

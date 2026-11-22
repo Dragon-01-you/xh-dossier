@@ -294,7 +294,9 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
                         item["content"], item["created_at"]
                     )
                 else:
-                    event_date, date_kind = item["created_at"], "unknown"
+                    # Assistant prose is not a user memory. Empty event_date
+                    # prevents downstream queries from treating it as a dated fact.
+                    event_date, date_kind = "", "unknown"
                 con.execute(
                     "INSERT INTO records (rec_id, source_file, created_at, role, content, md5, event_date, date_kind) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

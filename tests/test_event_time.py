@@ -18,6 +18,35 @@ def test_plain_statement_uses_mention_date():
     assert (event, kind, marker) == ("2026-11-22", "stated", None)
 
 
+def test_generic_prose_is_not_an_event():
+    # A work instruction is not a claim about when something happened. It must
+    # NOT inherit created_at as event_date (that is the bug #10 fixes).
+    event, kind, _ = detect_event_time("我觉得你可以深入看一下上面这些东西，这是我们的世界指南", "2026-11-22")
+    assert event == "" and kind == "unknown"
+
+
+def test_current_state_marker_is_not_an_event_date():
+    # "目前/现在的目录" describes a state, not "I did X today"; it must not become T.
+    for text in ("目前我们的世界指南是这版", "现在我们的目录里有这些资产"):
+        event, kind, _ = detect_event_time(text, "2026-11-22")
+        assert event == "" and kind == "unknown", (text, event, kind)
+
+
+def test_now_with_completion_is_stated():
+    event, kind, _ = detect_event_time("现在终于开工了", "2026-11-22")
+    assert event == "2026-11-22" and kind == "stated"
+
+
+def test_explicit_past_date_without_retro_word():
+    event, kind, _ = detect_event_time("2025-09-20 我砍掉了闲鱼副业", "2026-11-22")
+    assert event == "2025-09-20" and kind == "retrospective"
+
+
+def test_explicit_today_date_is_stated():
+    event, kind, _ = detect_event_time("2026-11-22 我先定了验收标准", "2026-11-22")
+    assert event == "2026-11-22" and kind == "stated"
+
+
 def test_retrospective_marker_flagged_unverified():
     event, kind, marker = detect_event_time("大一那会我做过一个校园卡项目", "2026-11-22")
     assert event == UNVERIFIED and kind == "retrospective" and marker is not None
@@ -34,7 +63,7 @@ def test_上周_is_retrospective():
 
 
 def test_empty_content_is_unknown():
-    assert detect_event_time("", "2026-11-22") == ("2026-11-22", "unknown", None)
+    assert detect_event_time("", "2026-11-22") == ("", "unknown", None)
 
 
 def test_needs_verification():
@@ -59,9 +88,10 @@ def test_version_number_not_parsed_as_date():
 
 def test_imperative_jide_not_retrospective():
     # "记得帮我..." / "请记得提交..." are imperatives, not recalled events.
+    # They are not historical claims and should not inherit a fake event date.
     for text in ("记得帮我看一下这个文档", "请记得提交报告"):
         event, kind, _ = detect_event_time(text, "2026-11-22")
-        assert kind == "stated", (text, event, kind)
+        assert kind == "unknown" and event == "", (text, event, kind)
 
 
 def test_month_precision_not_fabricated_into_day():

@@ -40,7 +40,16 @@ _AMBIGUOUS_RETRO = [r"记得", r"之前", r"当时", r"那会"]
 _PAST_CUES = [r"那", r"过", r"了", r"曾", r"以前", r"之前", r"当初", r"当时", r"回", r"上次", r"去年", r"上周"]
 
 # Explicit "now" markers: the event is at mention time; these WIN over retro cues.
-NOW_MARKERS = ["今天", "刚才", "刚刚", "现在", "这周", "本周", "这次", "目前", "正在"]
+# "现在" alone is too broad ("现在的目录"/"现在为你安装" are state/instructions),
+# so it only counts with a completion/progress cue in the same clause.
+NOW_MARKERS = ["今天", "刚才", "刚刚", "这周", "本周", "正在"]
+_NOW_CLAUSE_RE = re.compile(r"现在.*(?:了|终于|已经|开始|正在|刚)|(?:终于|已经|开始|正在|刚).*现在")
+
+
+def _has_now_marker(clause: str) -> bool:
+    if any(now in clause for now in NOW_MARKERS):
+        return True
+    return bool(_NOW_CLAUSE_RE.search(clause))
 
 # An absolute date must have PAIRED delimiters: 2025-09, 2025年09月, 2025/09/01.
 # This avoids slicing a version number like "2025-123" into 2025-12-03.
@@ -106,29 +115,57 @@ def _find_anchored_date(clause: str) -> tuple[str | None, DateKind | None]:
     return None, None
 
 
+def _is_before_mention(anchored: str, mention_date: str) -> bool:
+    """Compare an explicit anchor with the mention date at the precision we have."""
+    mention = (mention_date or "").strip()
+    if len(mention) < 7 or not re.match(r"20\d{2}[-/]\d{2}", mention):
+        return True  # no usable mention date => an explicit historical anchor wins
+    return anchored[: len(mention)] < mention[: len(anchored)]
+
+
 def detect_event_time(content: str, mention_date: str) -> tuple[str, DateKind, str | None]:
     """Return (event_date, date_kind, matched_marker).
 
-    Clause-level detection: only the clause containing a retrospective marker
-    is judged retro; an explicit now-marker in that clause wins (stated).
+    Semantics:
+    - explicit now-marker => event happened at mention time, ``stated``;
+    - explicit calendar anchor earlier than the mention => ``retrospective`` /
+      ``retrospective_month``;
+    - retrospective wording without a verifiable anchor => ``[记忆，待核]``;
+    - ordinary prose that makes no event-time claim => empty + ``unknown``.
+
+    Clause-level: an explicit now-marker wins over retro wording in the same
+    clause. A plain work request ("you should look at this") is not an event.
     """
     if not content:
-        return mention_date, "unknown", None
+        return "", "unknown", None
 
-    for clause in _clauses(content):
-        if any(now in clause for now in NOW_MARKERS):
-            # A "today/now" clause is current — but do not let it override a
-            # different retro clause; continue scanning other clauses.
-            continue
-        is_retro, marker = _clause_is_retrospective(clause)
-        if not is_retro:
-            continue
+    clauses = _clauses(content)
+
+    # 1) Explicit "today / just now / currently" claims.
+    for clause in clauses:
+        if _has_now_marker(clause):
+            return mention_date, "stated", None
+
+    # 2) Explicit calendar anchors, even without a "记得/以前" word.
+    for clause in clauses:
         anchored, precision = _find_anchored_date(clause)
-        if anchored:
-            return anchored, precision, marker  # type: ignore[return-value]
-        return UNVERIFIED, "retrospective", marker
+        if not anchored:
+            continue
+        if precision == "retrospective_month" and not _is_before_mention(anchored, mention_date):
+            return anchored, "stated", None
+        if precision == "retrospective" and not _is_before_mention(anchored, mention_date):
+            return anchored, "stated", None
+        return anchored, precision, None  # type: ignore[return-value]
 
-    return mention_date, "stated", None
+    # 3) Retrospective wording with no verifiable anchor.
+    for clause in clauses:
+        is_retro, marker = _clause_is_retrospective(clause)
+        if is_retro:
+            return UNVERIFIED, "retrospective", marker
+
+    # 4) Not an event-time claim at all. Do NOT copy created_at into event_date:
+    # that would recreate the exact bug #10 is fixing.
+    return "", "unknown", None
 
 
 def needs_verification(event_date: str) -> bool:
