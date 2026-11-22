@@ -78,7 +78,7 @@ def validate_kit(
             passed = False
 
         for line in text.splitlines():
-            if any(p in line for p in ("禁止", "严禁", "不要说", "AI 腔调")):
+            if any(p in line for p in ("禁止", "严禁", "不要说", "不要用", "别用", "不要出现", "AI 腔调")):
                 continue
             for cliche in AI_CLICHES:
                 if cliche in line:
@@ -105,9 +105,8 @@ def validate_kit(
             passed = False
 
     if unconfirmed_total > 0:
+        # SKILL rule 4 requires [待确认] markers; strict mode must not fail on honest uncertainty.
         diagnostics.append(f"INFO: {unconfirmed_total} '[待确认]' marker(s) pending backfill confirmation.")
-        if strict:
-            passed = False
 
     return passed, diagnostics
 

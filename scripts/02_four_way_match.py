@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import math
 import pathlib
 import re
@@ -198,6 +199,62 @@ DEFAULT_PATTERNS = [
     ("method_principle", "先定验收标准再动手", ["开工先定验收标准", "先想清楚问题是什么再写"]),
 ]
 
+# Structural signal that does not depend on the author's exact wording.
+CORRECTION_MARKERS = (
+    "不像", "不太像", "不对", "不是这样", "还是没", "没太好", "不够", "差得远",
+    "完全不是", "重做", "重新做", "我说了", "你又", "怎么又", "不匹配",
+)
+
+
+def detect_user_corrections(rows: list[dict], labels: list[int] | None = None) -> list[dict]:
+    """Find user turns that explicitly correct or reject the previous answer (no seed sentence needed)."""
+    hits: list[dict] = []
+    for idx, row in enumerate(rows):
+        if row.get("role") != "user":
+            continue
+        content = row.get("content") or ""
+        matched = [m for m in CORRECTION_MARKERS if m in content]
+        if not matched:
+            continue
+        hits.append({
+            "rec_id": row["rec_id"],
+            "created_at": row["created_at"],
+            "cluster": labels[idx] if labels and idx < len(labels) else -1,
+            "score": 1.0,
+            "reason": "matched:" + ",".join(matched[:3]),
+            "excerpt": content[:160].replace("\n", " "),
+        })
+    return hits
+
+
+def load_patterns_from_json(path: pathlib.Path) -> list[tuple[str, str, list[str]]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [(str(item["kind"]), str(item["title"]), [str(s) for s in item["seeds"]]) for item in data]
+
+
+def _kit_sentences(path: pathlib.Path) -> list[str]:
+    if not path.is_file():
+        return []
+    parts = re.split(r"[\n。；;]+", path.read_text(encoding="utf-8"))
+    seeds: list[str] = []
+    for part in parts:
+        cleaned = re.sub(r"^[\s\-*>#\d.、]+", "", part).strip()
+        if 6 <= len(cleaned) <= 80:
+            seeds.append(cleaned)
+    return seeds[:30]
+
+
+def patterns_from_kit(kit_dir: pathlib.Path) -> list[tuple[str, str, list[str]]]:
+    """Derive seeds from the user's own kit so recall does not depend on the author's wording."""
+    patterns: list[tuple[str, str, list[str]]] = []
+    seeds_02 = _kit_sentences(kit_dir / "02-核心判断准则.md")
+    if seeds_02:
+        patterns.append(("method_principle", "用户档案·判断准则", seeds_02))
+    seeds_04 = _kit_sentences(kit_dir / "04-正反例避坑账.md")
+    if seeds_04:
+        patterns.append(("ai_misunderstood_user", "用户档案·避坑反例", seeds_04))
+    return patterns or DEFAULT_PATTERNS
+
 
 def _encode_with_fastembed(texts: list[str], queries: list[str]) -> tuple[list[dict[str, float]], list[dict[str, float]]] | None:
     if importlib.util.find_spec("fastembed") is None:
@@ -218,6 +275,7 @@ def run_four_way_pipeline(
     use_fastembed: bool = False,
     cluster_threshold: float | None = None,
     pattern_threshold: float = 0.16,
+    patterns: list[tuple[str, str, list[str]]] | None = None,
 ) -> dict:
     """Execute all 4 matching ways on records in db_path and return structured evidence for backfill."""
     if not db_path.is_file():
@@ -231,12 +289,13 @@ def run_four_way_pipeline(
         con.close()
 
     if not rows:
-        return {"records": 0, "keyword_hits": {}, "clusters": {}, "pattern_hits": {}}
+        return {"records": 0, "keyword_hits": {}, "clusters": {}, "pattern_hits": {}, "candidate_total": 0}
 
+    active_patterns = patterns or DEFAULT_PATTERNS
     texts = [r["content"] for r in rows]
     kw_results = {kw: search_keyword(db_path, kw, limit=15) for kw in keywords}
 
-    flat_seeds = [s for _, _, seeds in DEFAULT_PATTERNS for s in seeds]
+    flat_seeds = [s for _, _, seeds in active_patterns for s in seeds]
     if use_fastembed:
         fe = _encode_with_fastembed(texts, flat_seeds)
         if fe is not None:
@@ -257,7 +316,7 @@ def run_four_way_pipeline(
         cluster_map[cid].append(row)
 
     pattern_hits: dict[str, dict] = {}
-    for kind, title, seeds in DEFAULT_PATTERNS:
+    for kind, title, seeds in active_patterns:
         passed = []
         filtered = []
         for idx, (row, vec) in enumerate(zip(rows, rec_raw)):
@@ -292,11 +351,26 @@ def run_four_way_pipeline(
             "filtered": filtered[:5],
         }
 
+    corrections = detect_user_corrections(rows, labels)
+    if corrections:
+        pattern_hits["用户明确纠正或否定（规则）"] = {
+            "kind": "user_correction",
+            "passed_count": len(corrections),
+            "filtered_count": 0,
+            "clusters_spanned": sorted({item["cluster"] for item in corrections}),
+            "sampled": corrections[:3],
+            "filtered": [],
+        }
+
+    candidate_total = sum(info["passed_count"] for info in pattern_hits.values())
+    candidate_total += sum(len(hits) for hits in kw_results.values())
+
     return {
         "records": len(rows),
         "keyword_hits": kw_results,
         "clusters": dict(cluster_map),
         "pattern_hits": pattern_hits,
+        "candidate_total": candidate_total,
     }
 
 
@@ -341,9 +415,28 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=pathlib.Path, help="Output markdown report path")
     parser.add_argument("--keywords", nargs="*", default=["记错", "验收", "拖延", "口音"], help="Exact keywords for Way 1")
     parser.add_argument("--use-fastembed", action="store_true", help="Use fastembed BAAI/bge-small-zh-v1.5 if installed")
+    parser.add_argument("--patterns", type=pathlib.Path, help="JSON pattern file: [{kind,title,seeds}]")
+    parser.add_argument("--patterns-from-kit", type=pathlib.Path, help="Derive seeds from a user kit directory (02/04)")
     args = parser.parse_args()
 
-    report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    patterns = None
+    if args.patterns:
+        patterns = load_patterns_from_json(args.patterns)
+    elif args.patterns_from_kit:
+        patterns = patterns_from_kit(args.patterns_from_kit)
+
+    try:
+        report = run_four_way_pipeline(
+            args.db, args.keywords, use_fastembed=args.use_fastembed, patterns=patterns
+        )
+    except FileNotFoundError:
+        print(f"FOUR_WAY_DB_NOT_FOUND: {args.db}")
+        print("请先运行 scripts/01_clean_and_index.py 生成 unified_index.db。")
+        return 2
+    except sqlite3.OperationalError as exc:
+        print(f"FOUR_WAY_BAD_DB: {args.db}: {exc}")
+        print("这个文件不是 01 生成的索引库，请重新运行 01_clean_and_index.py。")
+        return 2
     if report["records"] == 0:
         print("FOUR_WAY_EMPTY: 数据库里没有可匹配的原文记录（records=0）。")
         print("请先运行 scripts/01_clean_and_index.py 并确认 raw/ 里确实有导出的对话文件，不要把空报告当成跑通。")
@@ -351,7 +444,17 @@ def main() -> int:
     md = render_backfill_markdown(report)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(md, encoding="utf-8")
-    print(f"FOUR_WAY_OK records={report['records']} clusters={len(report['clusters'])} out={args.out}")
+    if report["candidate_total"] == 0:
+        print(
+            f"FOUR_WAY_NO_CANDIDATES records={report['records']} "
+            f"clusters={len(report['clusters'])} candidates=0 out={args.out}"
+        )
+        print("没有任何可回填候选：请检查导出格式/关键词/pattern 是否匹配你的真实措辞。")
+        return 2
+    print(
+        f"FOUR_WAY_OK records={report['records']} clusters={len(report['clusters'])} "
+        f"candidates={report['candidate_total']} out={args.out}"
+    )
     return 0
 
 

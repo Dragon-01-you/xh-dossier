@@ -1,6 +1,6 @@
 # 07 · 真实语料四路全 0：用户反复纠正 + 明确要求 TDD，仍挖不出任何候选
 
-Status: needs-triage
+Status: ready-for-human
 Type: bug
 Priority: P0
 Step: S6.1 / S6.5
@@ -44,3 +44,11 @@ Way 4 三个模式：全部 0 条通过
 2. 新增 `--patterns-from-kit <dir>`，从用户自己的 02/04 抽句；
 3. 加一个真实语料 fixture（本文件）进 CI，断言至少命中 1 条「纠正」候选；
 4. 0 候选 → `FOUR_WAY_NO_CANDIDATES`。
+
+## 修复（2026-11-22）
+
+- 新增结构化规则「用户明确纠正或否定」，只作用于 user 轮，不依赖种子句。
+- 新增 `--patterns <json>` 与 `--patterns-from-kit <dir>`（从用户自己的 02/04 抽种子）。
+- 0 候选 → `FOUR_WAY_NO_CANDIDATES` + exit 2，不再打印 `FOUR_WAY_OK`。
+- 回归：`test_user_correction_is_detected_without_seed_wording`、`test_zero_candidates_exits_nonzero`、`test_patterns_from_kit`
+- 复验：真实会话修复前 0 候选 → 修复后 `candidates=2`（REC-0003 / REC-0005）。

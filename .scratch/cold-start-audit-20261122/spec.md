@@ -46,6 +46,28 @@ Scope: 以“零环境新用户”身份，从 clone 跑到发布门禁；不修
 - 文件 SHA256 `145ac561a59d2dc5aac775d42bcf62538430f55df099e13d0b5001aa6342d200`（4071 bytes）。
 - 结论：产品主打的「反复纠正」「先验收再动手」在真实措辞下抓不到；见 issue 07。
 
+## 修复后复验（2026-11-22）
+
+| 项 | 修复前 | 修复后 | 回归测试 |
+|---|---|---|---|
+| 替代导出器 | 7 条全 user / 6 unknown | 6 条，3 user / 3 assistant，0 unknown | `test_extract_scriptcat_export_roles_date_and_fences` |
+| GBK / UTF-16 | 乱码入库，exit 0 | 正确中文，U+FFFD=0 | `test_gbk_and_utf16_exports_are_decoded` |
+| 批量 zip | `INDEX_EMPTY` | `zip_extracted=1, indexed=6` | `test_zip_export_is_extracted_and_indexed` |
+| strict + `[待确认]` | `VALIDATE_FAIL` | `VALIDATE_OK`（INFO） | `test_strict_allows_pending_marker` |
+| 「不要用…」 | 误报 CLICHE | 不误报 | `test_cliche_exemption_for_dont_use_phrase` |
+| 真实多轮四路 | 0 候选 | `candidates=2` | `test_user_correction_is_detected_without_seed_wording` |
+| 0 候选语义 | `FOUR_WAY_OK` exit 0 | `FOUR_WAY_NO_CANDIDATES` exit 2 | `test_zero_candidates_exits_nonzero` |
+| 缺 DB / 坏 schema | 裸 traceback | 专属 marker + exit 2 | `test_missing_db_returns_marker` / `test_bad_schema_db_returns_marker` |
+
+全量测试：33 → **43 passed**。
+
+变更文件（未提交，工作区）：
+
+- `scripts/01_clean_and_index.py`
+- `scripts/02_four_way_match.py`
+- `scripts/03_validate_kit.py`
+- `tests/test_cold_start_fixes.py`
+
 ## 复现前提
 
 - AfterChat 源码取自官方仓库 `AfterThink/AfterChat-Script`（AGPL-3.0），因 Greasyfork 在该网络不可达。

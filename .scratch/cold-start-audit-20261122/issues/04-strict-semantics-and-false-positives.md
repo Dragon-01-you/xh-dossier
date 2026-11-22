@@ -1,6 +1,6 @@
 # 04 · `--strict` 把合法 `[待确认]` 判死，并误杀正常措辞与 Linux 路径
 
-Status: needs-triage
+Status: ready-for-human
 Type: bug
 Priority: P1
 Step: S3.3 / S3.4 / S3.5
@@ -40,3 +40,11 @@ if unconfirmed_total > 0:
 1. strict 判定改为 `if strict and unconfirmed_total_without_shape > 0`，只对“形状不合规”的 `[待确认]` 失败；
 2. 豁免正则加 `不要用|别用|不要出现`；
 3. 路径规则统一：`/home|x` 与 `[A-Z]:\\Users` 同权，或对模板占位路径做 allowlist。
+
+## 修复（2026-11-22）
+
+- strict 下 `[待确认]` 只报 INFO，不再 fail（对齐 v6 S3.3 与 SKILL rule 4）。
+- 禁词豁免增加 `不要用 / 别用 / 不要出现`。
+- 回归：`test_strict_allows_pending_marker`、`test_cliche_exemption_for_dont_use_phrase`
+- 复验：含 `[待确认]` 的 kit 修复前 VALIDATE_FAIL → 修复后 VALIDATE_OK；`不要用…` 不再误报。
+- 未改：`/home/<name>` 仍按 home 目录敏感路径处理（与 `C:\Users\<name>` 对称）；建议文档提示写 `~/notes` 或非 home 路径。

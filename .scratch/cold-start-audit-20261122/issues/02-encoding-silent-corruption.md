@@ -1,6 +1,6 @@
 # 02 · GBK / UTF-16 导出被静默写成乱码，仍报 INDEX_OK
 
-Status: needs-triage
+Status: ready-for-human
 Type: bug
 Priority: P0
 Step: S5.8
@@ -43,3 +43,10 @@ REC-0013  utf16_export.md  'unknown'  '��#'
 1. 新增 `read_text_with_detection(path)`；
 2. 三个 fixture（GBK / UTF-16 / BOM）进 CI，断言不出现 `\ufffd`；
 3. 输出 `ENCODING_REPORT`（成功/跳过/失败文件清单）。
+
+## 修复（2026-11-22）
+
+- `read_text_detected()`：BOM → UTF-8 → UTF-16（含无 BOM 的 NUL 启发）→ GB18030；失败计入 `decode_failed` 并跳过，不再 `errors="replace"`。
+- `INDEX_OK` 增加 `decode_failed` / `zip_extracted`；有文件无法解码时打印 `WARN_DECODE_FAILED`。
+- 回归：`tests/test_cold_start_fixes.py::test_gbk_and_utf16_exports_are_decoded`
+- 复验：修复前 GBK/UTF-16 入库为乱码 → 修复后正确中文，U+FFFD 计数为 0。

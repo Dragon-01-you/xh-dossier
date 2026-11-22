@@ -1,6 +1,6 @@
 # 01 · 真实导出解析只认 AfterChat 格式，其他导出器会把 AI 回复记成用户发言
 
-Status: needs-triage
+Status: ready-for-human
 Type: bug
 Priority: P0
 Step: S5.2
@@ -48,3 +48,9 @@ real_export = "## Conversation" in text and ("🧑‍💻 User" in text or "🤖
 1. 把“真实导出识别 + 角色解析”抽成独立函数，按“格式指纹”匹配多个导出器；
 2. 加两个真实 fixture（AfterChat / 替代导出器）进 CI，断言 role 分布与 unknown=0；
 3. 未识别格式时输出 `EXPORT_FORMAT_UNKNOWN` + 可操作提示，禁止静默走通用分支。
+
+## 修复（2026-11-22）
+
+- `01_clean_and_index.py` 新增 emoji role heading 解析（AfterChat / ScriptCat 系），解析 `**Date**: M/D/YYYY`，剥离外层代码围栏，标题/URL 不再入库。
+- 回归：`tests/test_cold_start_fixes.py::test_extract_scriptcat_export_roles_date_and_fences`
+- 复验：修复前 7 条全 user / 6 unknown → 修复后 6 条（3 user / 3 assistant）、unknown=0、日期 2026-11-22。

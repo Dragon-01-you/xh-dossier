@@ -1,6 +1,6 @@
 # 03 · “导出全部”得到 zip 后无法入库；缺 DB/坏 schema 仍裸 traceback
 
-Status: needs-triage
+Status: ready-for-human
 Type: bug
 Priority: P1
 Step: S4.3 / S5.3 / S6.2
@@ -41,3 +41,10 @@ exit 1，但无 `FOUR_WAY_DB_NOT_FOUND` 之类的专属 marker。
 1. `01` 增加 zip 分支（`zipfile` 标准库，解包到 `work/_unzipped/`）；
 2. `02` 在 `sqlite3.connect` 后先 `PRAGMA table_info(records)`，缺失即给专属 marker；
 3. 两个失败 fixture 进 H2 清单。
+
+## 修复（2026-11-22）
+
+- `.zip` 自动解包到 `work/_unzipped/`（拒绝绝对路径与 `..`），只提取 .md/.txt/.json/.jsonl。
+- 缺 DB → `FOUR_WAY_DB_NOT_FOUND` + exit 2；坏 schema → `FOUR_WAY_BAD_DB` + exit 2，均无 traceback。
+- 回归：`test_zip_export_is_extracted_and_indexed`、`test_missing_db_returns_marker`、`test_bad_schema_db_returns_marker`
+- 复验：修复前 zip → INDEX_EMPTY；修复后 `zip_extracted=1, indexed=6`。

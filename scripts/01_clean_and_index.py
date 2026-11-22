@@ -10,10 +10,104 @@ import json
 import pathlib
 import re
 import sqlite3
+import zipfile
 from typing import Any
 
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
+
+# Role headings used by common exporters:
+#   AfterChat:            ### 🧑‍💻 User / ### 🤖 Assistant
+#   ScriptCat exporter:   ## 🧑 User     / ## 🤖 DeepSeek AI
+ROLE_HEADING_RE = re.compile(
+    r"(?m)^#{2,4}[ \t]*(?P<label>(?:🧑‍💻|🧑|👤|🤖|👩‍💻|👨‍💻)[^\n]{0,40})[ \t]*$"
+)
+TEXT_EXTS = {".md", ".txt", ".json", ".jsonl"}
+
+
+def read_text_detected(path: pathlib.Path) -> str:
+    """Decode a text export using BOM/UTF-8/UTF-16/GB18030, never silently replacing bytes."""
+    raw = path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # UTF-16 without BOM: many NUL bytes in ASCII-heavy text.
+    if raw.count(b"\x00") > max(2, len(raw) // 10):
+        try:
+            return raw.decode("utf-16-le")
+        except UnicodeDecodeError:
+            pass
+    # GB18030 covers GBK/GB2312; raises UnicodeDecodeError on truly invalid bytes.
+    return raw.decode("gb18030")
+
+
+def _parse_export_time(text: str) -> str:
+    """Extract a date from AfterChat `**Time:**` or ScriptCat `**Date**: M/D/YYYY` metadata."""
+    m = re.search(r"\*\*Time:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"\*\*Date\*\*:\s*(\d{1,2})/(\d{1,2})/(\d{4})", text)
+    if m:
+        first, second, year = (int(g) for g in m.groups())
+        month, day = (first, second) if first <= 12 else (second, first)
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    return "unknown"
+
+
+def _strip_wrapping_code_fence(body: str) -> str:
+    """Drop separator rules and a single ```lang ... ``` wrapper that some exporters add around message text."""
+    lines = body.strip().splitlines()
+    while lines and lines[0].strip() in {"", "---", "***", "___"}:
+        lines.pop(0)
+    while lines and lines[-1].strip() in {"", "---", "***", "___"}:
+        lines.pop()
+    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return "\n".join(lines).strip()
+
+
+def _role_from_label(label: str) -> str | None:
+    lowered = label.lower()
+    if "🤖" in label:
+        return "assistant"
+    if any(mark in label for mark in ("🧑", "👤", "👩", "👨")):
+        return "user"
+    if "assistant" in lowered or re.search(r"\bai\b", lowered):
+        return "assistant"
+    if "user" in lowered or "用户" in label:
+        return "user"
+    return None
+
+
+def _extract_role_heading_rows(text: str, source_name: str) -> list[dict[str, str]]:
+    """Parse conversations split by emoji role headings; ignores title/URL preamble."""
+    matches = list(ROLE_HEADING_RE.finditer(text))
+    if not matches:
+        return []
+    file_ts = _parse_export_time(text)
+    rows: list[dict[str, str]] = []
+    for idx, match in enumerate(matches):
+        role = _role_from_label(match.group("label"))
+        if role is None:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = _strip_wrapping_code_fence(text[start:end])
+        body = clean_text(body)
+        if len(body) < 4:
+            continue
+        rows.append({
+            "source_file": source_name,
+            "created_at": file_ts,
+            "role": role,
+            "content": body,
+        })
+    return rows
 
 
 def clean_text(raw: str) -> str:
@@ -111,8 +205,8 @@ def _records_from_json_obj(data: Any, source_name: str) -> list[dict[str, str]]:
     return rows
 
 
-def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace").strip()
+def _extract_from_json(path: pathlib.Path, text: str | None = None) -> list[dict[str, str]]:
+    text = (text if text is not None else read_text_detected(path)).strip()
     if not text:
         return []
     try:
@@ -123,9 +217,10 @@ def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
     return _records_from_json_obj(data, path.name)
 
 
-def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
+def _extract_from_jsonl(path: pathlib.Path, text: str | None = None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+    content = text if text is not None else read_text_detected(path)
+    for line_no, raw_line in enumerate(content.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
@@ -138,36 +233,18 @@ def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
     return rows
 
 
-def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+def _extract_from_text(path: pathlib.Path, text: str | None = None) -> list[dict[str, str]]:
+    text = text if text is not None else read_text_detected(path)
 
-    # AfterChat / real exporter format:
-    #   ## Metadata / - **Time:** 2026-11-18 ... / ## Conversation
-    #   ### 🧑‍💻 User   /   ### 🤖 Assistant
-    # Legacy format: plain "User:" / "Assistant:" lines after ## headings.
-    real_export = "## Conversation" in text and ("🧑‍💻 User" in text or "🤖 Assistant" in text)
+    # Emoji role headings cover AfterChat and ScriptCat-style exporters.
+    role_rows = _extract_role_heading_rows(text, path.name)
+    if role_rows:
+        return role_rows
+
     file_ts = "unknown"
     ts_m = re.search(r"\*\*Time:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
     if ts_m:
         file_ts = ts_m.group(1)
-
-    if real_export:
-        conv = text.split("## Conversation", 1)[1]
-        turn_re = re.compile(r"(?m)^#{2,4}\s+(🧑‍💻\s*User|🤖\s*Assistant|👤\s*User|🤖\s*AI)\s*$")
-        parts = turn_re.split(conv)
-        rows: list[dict[str, str]] = []
-        for i in range(1, len(parts) - 1, 2):
-            label, body_raw = parts[i], parts[i + 1]
-            role = "user" if "User" in label else "assistant"
-            body = clean_text(body_raw)
-            if len(body) >= 4:
-                rows.append({
-                    "source_file": path.name,
-                    "created_at": file_ts,
-                    "role": role,
-                    "content": body,
-                })
-        return rows
 
     sections = re.split(r"(?m)^#{2,3}\s+", text)
     rows = []
@@ -204,8 +281,28 @@ def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
     return rows
 
 
-def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, int]:
-    """Scan raw_dir (.json/.jsonl/.md/.txt), deduplicate by full-text MD5, and store into SQLite FTS5 cold DB."""
+def _safe_extract_zip(src: pathlib.Path, dest: pathlib.Path) -> int:
+    """Extract only text exports from a zip, rejecting absolute/traversal paths. Returns file count."""
+    extracted = 0
+    with zipfile.ZipFile(src) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            parts = pathlib.PurePosixPath(info.filename).parts
+            if info.filename.startswith("/") or ".." in parts:
+                continue
+            target = dest.joinpath(*parts)
+            if target.suffix.lower() not in TEXT_EXTS:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as rf, open(target, "wb") as wf:
+                wf.write(rf.read())
+            extracted += 1
+    return extracted
+
+
+def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, object]:
+    """Scan raw_dir (.json/.jsonl/.md/.txt, plus .zip archives), deduplicate by full-text MD5, and store into SQLite FTS5 cold DB."""
     if not raw_dir.is_dir():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
 
@@ -233,19 +330,43 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
         total_raw = 0
         dedup_skipped = 0
         indexed = 0
+        decode_failed = 0
+        decode_failed_files: list[str] = []
+        zip_extracted = 0
 
-        for path in sorted(raw_dir.rglob("*")):
-            if not path.is_file():
+        # "Export all" usually produces a zip; unzip first so users need no manual step.
+        search_dirs = [raw_dir]
+        for zpath in sorted(raw_dir.rglob("*.zip")):
+            dest = db_path.parent / "_unzipped" / zpath.stem
+            try:
+                n = _safe_extract_zip(zpath, dest)
+            except (zipfile.BadZipFile, OSError) as exc:
+                print(f"WARN: skipped zip {zpath.name}: {exc}")
                 continue
+            if n:
+                zip_extracted += n
+                search_dirs.append(dest)
+
+        paths: list[pathlib.Path] = []
+        for folder in search_dirs:
+            paths.extend(sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_EXTS))
+
+        for path in paths:
+            try:
+                text = read_text_detected(path)
+            except (UnicodeDecodeError, OSError) as exc:
+                decode_failed += 1
+                decode_failed_files.append(path.name)
+                print(f"WARN: skipped undecodable file {path.name}: {exc}")
+                continue
+
             ext = path.suffix.lower()
             if ext == ".json":
-                extracted = _extract_from_json(path)
+                extracted = _extract_from_json(path, text)
             elif ext == ".jsonl":
-                extracted = _extract_from_jsonl(path)
-            elif ext in {".md", ".txt"}:
-                extracted = _extract_from_text(path)
+                extracted = _extract_from_jsonl(path, text)
             else:
-                continue
+                extracted = _extract_from_text(path, text)
 
             for item in extracted:
                 total_raw += 1
@@ -266,7 +387,14 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
     finally:
         con.close()
 
-    return {"total_raw": total_raw, "dedup_skipped": dedup_skipped, "indexed": indexed}
+    return {
+        "total_raw": total_raw,
+        "dedup_skipped": dedup_skipped,
+        "indexed": indexed,
+        "decode_failed": decode_failed,
+        "decode_failed_files": decode_failed_files,
+        "zip_extracted": zip_extracted,
+    }
 
 
 def _escape_like(term: str) -> str:
@@ -330,14 +458,24 @@ def main() -> int:
         return 2
 
     stats = clean_and_index(args.raw, args.db)
+    if stats["decode_failed"]:
+        print(
+            f"WARN_DECODE_FAILED: {stats['decode_failed']} 个文件无法解码，已跳过："
+            + ", ".join(stats["decode_failed_files"][:5])
+        )
     if stats["indexed"] == 0:
         print(
             f"INDEX_EMPTY: 未在 {args.raw} 找到可索引的 .json/.jsonl/.md/.txt 记录"
-            f"（total_raw={stats['total_raw']}）。"
+            f"（total_raw={stats['total_raw']}, decode_failed={stats['decode_failed']}, "
+            f"zip_extracted={stats['zip_extracted']}）。"
         )
         print("不要把 indexed=0 当成成功；请检查导出文件是否真的落地，或先运行 scripts/00_export_wizard.py。")
         return 2
-    print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
+    print(
+        f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} "
+        f"indexed={stats['indexed']} decode_failed={stats['decode_failed']} "
+        f"zip_extracted={stats['zip_extracted']}"
+    )
     if args.query:
         hits = search_keyword(args.db, args.query)
         print(f"QUERY '{args.query}' -> {len(hits)} hit(s)")
