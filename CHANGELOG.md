@@ -12,7 +12,7 @@
 - 真实 59 个豆包导出、729 条记录：108 条可用工作原话 → 6 份档案 `VALIDATE_OK`；真实 DOM 兜底 5 个会话 → 18 条记录 → `BUILD_OK`。
 
 ### 新增：一条命令跑完主链路
-- `scripts/xh.py build`：`raw → 01 index → 02 match → 04 bootstrap → 05 broad backfill → 03 validate` 一条命令。
+- `scripts/xh.py build`：`raw → 01 index → 02 match → 04 bootstrap → 05 broad backfill → 05/06 index → 07 三路召回 → 03 validate` 一条命令；默认跑检索，`--skip-retrieval` 才跳过。
 - `scripts/xh.py bootstrap`：只生成 6 份初稿。
 - `05_deep_backfill.py --broad`（`xh.py backfill --broad`）：在严格自挫信号之外，补充未被档案引用的身份/规则/判断类原话；每条仍 `needs_llm=true` 且未签字。
 - 真实 729 库 broad 模式：`candidates=40`，四类 patch 文件均生成；严格模式仍保持原行为（真实库 `candidates=0`）。
@@ -22,7 +22,7 @@
 
 ### 测试
 - 新增 `tests/test_bootstrap_kit.py`：6 份文件严格校验、证据行、密钥不泄漏、broad 只产未引用原话。
-- 全量 `191 passed`；真实 6 档案 `VALIDATE_OK`；真实 59 导出 `BUILD_OK`。
+- 全量 `191 passed`；真实 6 档案 `VALIDATE_OK`；真实 59 导出 `BUILD_OK`；真实 729 库三路召回分别命中 `temporal=5 / graph=5 / keyword=5`。
 
 ## 0.2.0-rc.2 — 2026-11-23
 
