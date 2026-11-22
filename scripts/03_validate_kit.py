@@ -53,6 +53,45 @@ SENSITIVE_PATH_RE = re.compile(
 )
 
 
+# `[待确认]` tri-state scanning (CONFLICT-05 / issue #15):
+# - A compliant marker: `[待确认] <疑点> ｜ 原文：「…」 ｜ 出处：<file>:<line>` -> INFO, never fails.
+# - B bare marker: no source/quote -> PENDING_UNTRACEABLE in strict mode.
+# - C meta-rule reference inside inline backticks or a fenced code block -> not counted.
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+FENCE_RE = re.compile(r"^\s*```")
+PENDING_TOKEN = "[待确认]"
+HAS_QUOTE_RE = re.compile(r"原文\s*[:：]\s*\S")
+HAS_SOURCE_RE = re.compile(r"出处\s*[:：]\s*\S")
+
+
+def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int]]:
+    """Return (compliant_count, bare_line_numbers, pending_line_numbers).
+
+    Lines inside fenced code blocks and inline backtick spans are ignored (case C),
+    matching the previous `` `[待确认]` `` meta-rule exemption. The pending line
+    numbers let the caller exempt marker shape lines from the placeholder check.
+    """
+    compliant = 0
+    bare_lines: list[int] = []
+    pending_lines: set[int] = set()
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        scan_line = INLINE_CODE_RE.sub("", line)
+        if PENDING_TOKEN not in scan_line:
+            continue
+        pending_lines.add(lineno)
+        if HAS_QUOTE_RE.search(scan_line) and HAS_SOURCE_RE.search(scan_line):
+            compliant += 1
+        else:
+            bare_lines.append(lineno)
+    return compliant, bare_lines, pending_lines
+
+
 def validate_kit(
     target_dir: pathlib.Path,
     strict: bool = False,
@@ -64,7 +103,7 @@ def validate_kit(
         return False, [f"Target directory missing: {target_dir}"]
 
     passed = True
-    unconfirmed_total = 0
+    compliant_total = 0
 
     for fname in REQUIRED_KIT_FILES:
         fpath = target_dir / fname
@@ -96,18 +135,31 @@ def validate_kit(
                     diagnostics.append(f"FORBIDDEN_PII_TERM '{term}' found in {fname}")
                     passed = False
 
-        # Skip backtick-quoted meta references like `[待确认]` in AI collaboration instructions (e.g. AGENTS.md)
-        cleaned_for_unconfirmed = re.sub(r"`\[待确认\]`", "", text)
-        unconfirmed_total += cleaned_for_unconfirmed.count("[待确认]")
-        placeholders = PLACEHOLDER_RE.findall(text)
+        # `[待确认]` tri-state (CONFLICT-05): A compliant -> INFO; B bare -> fail;
+        # C backtick/fence meta reference -> ignored by _scan_pending_markers.
+        compliant, bare_lines, pending_lines = _scan_pending_markers(text)
+        compliant_total += compliant
+        for lineno in bare_lines:
+            diagnostics.append(f"PENDING_UNTRACEABLE: {fname}:{lineno}")
+            if strict:
+                passed = False
+
+        # Pending marker shape lines are exempt from the placeholder check: the
+        # documented shape uses `<疑点>` / `<file>:<line>`, which PLACEHOLDER_RE
+        # would otherwise flag as unfilled on an otherwise compliant marker.
+        placeholders: list[str] = []
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if lineno in pending_lines:
+                continue
+            placeholders.extend(PLACEHOLDER_RE.findall(line))
         if strict and placeholders:
             diagnostics.append(f"UNFILLED placeholders in {fname}: {placeholders[:5]}")
             passed = False
 
-    if unconfirmed_total > 0:
-        diagnostics.append(f"INFO: {unconfirmed_total} '[待确认]' marker(s) pending backfill confirmation.")
-        if strict:
-            passed = False
+    if compliant_total > 0:
+        diagnostics.append(
+            f"INFO: {compliant_total} compliant '[待确认]' marker(s) pending backfill confirmation."
+        )
 
     return passed, diagnostics
 
@@ -115,7 +167,11 @@ def validate_kit(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate the 6-file AI onboarding kit.")
     parser.add_argument("--target", required=True, type=pathlib.Path, help="Directory holding the 6 kit files")
-    parser.add_argument("--strict", action="store_true", help="Fail if template placeholders or [待确认] remain")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail on template placeholders or bare/untraceable [待确认]; compliant markers stay INFO",
+    )
     parser.add_argument("--forbidden", nargs="*", default=[], help="Extra personal terms that must not appear")
     args = parser.parse_args()
 
