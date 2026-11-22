@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Any
 
+from event_time import detect_event_time
+
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
 
@@ -140,8 +142,37 @@ def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
 
 def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
     text = path.read_text(encoding="utf-8", errors="replace")
+
+    # AfterChat / real exporter format:
+    #   ## Metadata / - **Time:** 2026-11-18 ... / ## Conversation
+    #   ### 🧑‍💻 User   /   ### 🤖 Assistant
+    # Legacy format: plain "User:" / "Assistant:" lines after ## headings.
+    real_export = "## Conversation" in text and ("🧑‍💻 User" in text or "🤖 Assistant" in text)
+    file_ts = "unknown"
+    ts_m = re.search(r"\*\*Time:\*\*\s*(\d{4}-\d{2}-\d{2})", text)
+    if ts_m:
+        file_ts = ts_m.group(1)
+
+    if real_export:
+        conv = text.split("## Conversation", 1)[1]
+        turn_re = re.compile(r"(?m)^#{2,4}\s+(🧑‍💻\s*User|🤖\s*Assistant|👤\s*User|🤖\s*AI)\s*$")
+        parts = turn_re.split(conv)
+        rows: list[dict[str, str]] = []
+        for i in range(1, len(parts) - 1, 2):
+            label, body_raw = parts[i], parts[i + 1]
+            role = "user" if "User" in label else "assistant"
+            body = clean_text(body_raw)
+            if len(body) >= 4:
+                rows.append({
+                    "source_file": path.name,
+                    "created_at": file_ts,
+                    "role": role,
+                    "content": body,
+                })
+        return rows
+
     sections = re.split(r"(?m)^#{2,3}\s+", text)
-    rows: list[dict[str, str]] = []
+    rows = []
     turn_re = re.compile(r"(?mi)^(?=(?:user|assistant|ai|助手|用户)\s*[:：])")
 
     for idx, section in enumerate(sections):
@@ -149,7 +180,7 @@ def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
         if not raw_block:
             continue
         date_m = re.search(r"(\d{4}-\d{2}-\d{2})", raw_block)
-        ts = date_m.group(1) if date_m else "unknown"
+        ts = date_m.group(1) if date_m else file_ts
         if idx > 0:
             # Skip heading-only sections with no body lines beneath them
             if "\n" not in raw_block:
@@ -194,7 +225,9 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
                 created_at TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                md5 TEXT NOT NULL UNIQUE
+                md5 TEXT NOT NULL UNIQUE,
+                event_date TEXT NOT NULL DEFAULT '',
+                date_kind TEXT NOT NULL DEFAULT 'stated'
             )
             """
         )
@@ -227,9 +260,15 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
                 seen_md5.add(digest)
                 indexed += 1
                 rec_id = f"REC-{indexed:04d}"
+                # Issue #10: separate event time (T) from mention time (T').
+                event_date, date_kind, _marker = detect_event_time(
+                    item["content"], item["created_at"]
+                )
                 con.execute(
-                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5) VALUES (?, ?, ?, ?, ?, ?)",
-                    (rec_id, item["source_file"], item["created_at"], item["role"], item["content"], digest),
+                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5, event_date, date_kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rec_id, item["source_file"], item["created_at"], item["role"], item["content"], digest,
+                     event_date, date_kind),
                 )
                 con.execute("INSERT INTO records_fts (rec_id, content) VALUES (?, ?)", (rec_id, item["content"]))
 
@@ -291,7 +330,27 @@ def main() -> int:
     parser.add_argument("--query", default="", help="Optional test keyword query after indexing")
     args = parser.parse_args()
 
-    stats = clean_and_index(args.raw, args.db)
+    # A wrong path is the most common real-user failure, and a raw traceback makes people
+    # think the project is broken. Report the expected input problems in plain language with
+    # an actionable next step; anything unexpected still raises so it stays diagnosable.
+    try:
+        stats = clean_and_index(args.raw, args.db)
+    except FileNotFoundError:
+        print(f"RAW_DIR_NOT_FOUND: {args.raw}")
+        print("  这里要填的是导出原件所在的目录，不是单个文件。")
+        print("  先按 docs/02-multi-platform-export.md 用浏览器脚本导出，把 .md / .json 放进 raw/，再重跑本命令。")
+        print(f'  例：python -X utf8 scripts/01_clean_and_index.py --raw raw --db work/unified_index.db')
+        return 2
+    except PermissionError as exc:
+        print(f"PERMISSION_DENIED: {exc}")
+        print("  目标文件被占用或没有写权限。请关闭正在打开该 .db 文件的程序后重试。")
+        return 2
+
+    if stats["total_raw"] == 0:
+        print(f"NO_RECORDS: {args.raw} 里没有找到可导出的对话原件（.md / .json / .jsonl / .txt）。")
+        print("  请确认导出是否真的落了文件，而不是只点了导出按钮。")
+        return 2
+
     print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
     if args.query:
         hits = search_keyword(args.db, args.query)
