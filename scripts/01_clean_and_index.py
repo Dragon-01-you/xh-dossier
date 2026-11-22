@@ -12,6 +12,8 @@ import re
 import sqlite3
 from typing import Any
 
+from event_time import detect_event_time
+
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
 
@@ -246,7 +248,9 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
                 created_at TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                md5 TEXT NOT NULL UNIQUE
+                md5 TEXT NOT NULL UNIQUE,
+                event_date TEXT NOT NULL DEFAULT '',
+                date_kind TEXT NOT NULL DEFAULT 'stated'
             )
             """
         )
@@ -280,9 +284,32 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
                 seen_md5.add(digest)
                 indexed += 1
                 rec_id = f"REC-{indexed:04d}"
+                # Issue #10: created_at is mention time (T'); event_date is the
+                # time the event actually happened (T). Event time only applies to
+                # the user's own statements; assistant prose (especially
+                # "Thought Process") is not a user memory and must not pollute the
+                # retrospective ledger.
+                if item["role"] == "user":
+                    event_date, date_kind, _marker = detect_event_time(
+                        item["content"], item["created_at"]
+                    )
+                else:
+                    # Assistant prose is not a user memory. Empty event_date
+                    # prevents downstream queries from treating it as a dated fact.
+                    event_date, date_kind = "", "unknown"
                 con.execute(
-                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5) VALUES (?, ?, ?, ?, ?, ?)",
-                    (rec_id, item["source_file"], item["created_at"], item["role"], item["content"], digest),
+                    "INSERT INTO records (rec_id, source_file, created_at, role, content, md5, event_date, date_kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        rec_id,
+                        item["source_file"],
+                        item["created_at"],
+                        item["role"],
+                        item["content"],
+                        digest,
+                        event_date,
+                        date_kind,
+                    ),
                 )
                 con.execute("INSERT INTO records_fts (rec_id, content) VALUES (?, ?)", (rec_id, item["content"]))
 
@@ -320,7 +347,8 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
             safe_q = '"' + q.replace('"', '""') + '"'
             rows = con.execute(
                 """
-                SELECT r.rec_id, r.source_file, r.created_at, r.role, r.content
+                SELECT r.rec_id, r.source_file, r.created_at, r.role, r.content,
+                       r.event_date, r.date_kind
                 FROM records_fts f
                 JOIN records r ON r.rec_id = f.rec_id
                 WHERE records_fts MATCH ?
@@ -332,7 +360,8 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
             escaped = _escape_like(q)
             rows = con.execute(
                 """
-                SELECT rec_id, source_file, created_at, role, content
+                SELECT rec_id, source_file, created_at, role, content,
+                       event_date, date_kind
                 FROM records
                 WHERE content LIKE ? ESCAPE '\\'
                 LIMIT ?
@@ -379,7 +408,10 @@ def main() -> int:
         hits = search_keyword(args.db, args.query)
         print(f"QUERY '{args.query}' -> {len(hits)} hit(s)")
         for h in hits[:5]:
-            print(f"  [{h['rec_id']} | {h['created_at']}] {h['content'][:90].replace(chr(10), ' ')}")
+            print(
+                f"  [{h['rec_id']} | said={h['created_at']} | event={h['event_date']} "
+                f"| {h['date_kind']}] {h['content'][:90].replace(chr(10), ' ')}"
+            )
     return 0
 
 
