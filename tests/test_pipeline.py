@@ -380,3 +380,16 @@ def test_validate_kit_detects_common_pii_and_credentials(tmp_path: pathlib.Path,
 def test_validate_kit_does_not_false_positive_on_benign_numbers(tmp_path: pathlib.Path, benign: str) -> None:
     ok, msgs = _kit_with(tmp_path, benign)
     assert ok, f"benign content wrongly flagged: {benign} -> {msgs}"
+
+def test_jsonl_time_field_preserved(tmp_path: pathlib.Path) -> None:
+    p = tmp_path / "kimi.jsonl"
+    p.write_text(
+        '{"role":"user","content":"JSONL 导出也要保留时间","time":"2026-11-19"}\n'
+        '{"role":"assistant","content":"收到，按 time 字段写入 created_at。","time":"2026-11-21"}\n',
+        encoding="utf-8",
+    )
+    rows = mod_clean._extract_from_jsonl(p)
+    assert len(rows) == 2
+    assert [r["created_at"] for r in rows] == ["2026-11-19", "2026-11-21"]
+    assert rows[0]["role"] == "user"
+    assert rows[1]["role"] == "assistant"
