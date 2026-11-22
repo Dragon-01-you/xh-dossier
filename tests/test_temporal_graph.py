@@ -447,6 +447,31 @@ def test_graph_build_uses_event_date_for_edges(tmp_path: pathlib.Path) -> None:
     assert row[1] == "2026-11-20"
 
 
+def test_unknown_event_time_is_not_faked_as_mention_date(tmp_path: pathlib.Path) -> None:
+    db = _make_db(
+        tmp_path,
+        [
+            ("R1", "2026-11-20", "user", "我去年秋天开始学习 Python"),
+            ("R2", "2026-11-21", "user", "我很早以前做过一个项目，具体日期记不清"),
+        ],
+        event_dates={"R1": "2025-10-01", "R2": "[记忆，待核]"},
+    )
+    stats = mod05.backfill_from_records(db)
+    assert stats["unknown_event"] == 1
+    con = sqlite3.connect(str(db))
+    con.row_factory = sqlite3.Row
+    rows = {r["fact_id"]: dict(r) for r in con.execute("SELECT * FROM fact_validity")}
+    con.close()
+    assert rows["R1"]["valid_from"] == "2025-10-01"
+    assert rows["R2"]["valid_from"] == ""
+    assert rows["R2"]["trans_from"] == "2026-11-21"
+
+    valid_view = mod05.query_as_of(db, "2026-01-01", clock="valid")
+    assert [r["rec_id"] for r in valid_view] == ["R1"]
+    transaction_view = mod05.query_as_of(db, "2026-11-22", clock="transaction")
+    assert {r["rec_id"] for r in transaction_view} == {"R1", "R2"}
+
+
 # --------------------------------------------------------------------------- #
 # 15. No time / graph filter must not fabricate a full-table hit
 # --------------------------------------------------------------------------- #
