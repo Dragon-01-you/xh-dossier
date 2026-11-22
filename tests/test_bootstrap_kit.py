@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 bootstrap_mod = importlib.import_module("04_bootstrap_kit")
 backfill_mod = importlib.import_module("05_deep_backfill")
+l2_apply_mod = importlib.import_module("08_l2_apply")
 
 
 def _db(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -76,3 +77,25 @@ def test_broad_layer2_finds_uncited_durable_record(tmp_path: pathlib.Path) -> No
     assert proposals, "broad mode should propose at least one uncited durable record"
     assert all(p.needs_llm for p in proposals)
     assert all(p.rec_id not in coverage.covered_rec_ids for p in proposals)
+
+
+def test_unsigned_l2_apply_adds_traceable_pending_zone(tmp_path: pathlib.Path) -> None:
+    db = _db(tmp_path)
+    kit = tmp_path / "kit"
+    bootstrap_mod.build_kit(db, kit)
+    l2 = tmp_path / "l2"
+    patches = l2 / "l2_profile_patches"
+    patches.mkdir(parents=True)
+    excerpt = "我的项目是芯火知识库，必须保留原文出处，不要编造没有发生的事。"
+    (patches / "01-身份与当前主线.md.patch.md").write_text(
+        "### L2-0001 [待确认] [REC-0003]\n"
+        f"- **原文摘录**：> {excerpt}\n", encoding="utf-8")
+    out = tmp_path / "kit_next"
+    res = l2_apply_mod.apply_unsigned(kit, l2, out)
+    assert res["applied"] == 1
+    assert res["validate_ok"], res["validate_messages"]
+    text = (out / "01-身份与当前主线.md").read_text(encoding="utf-8")
+    assert "二层回流待确认区（机器候选，未签字）" in text
+    assert "[待确认] L2-0001" in text
+    assert "_evidence/l2-lines.md:5" in text
+    assert not (kit / "01-身份与当前主线.md").read_text(encoding="utf-8").count("L2-0001")
