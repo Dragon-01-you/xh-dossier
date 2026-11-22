@@ -16,6 +16,29 @@ PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTI
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
 
 
+def _read_text_checked(path: pathlib.Path, encoding_stats: dict | None) -> str:
+    """Read a file as UTF-8, counting illegal bytes instead of silently replacing them.
+
+    ``errors="replace"`` silently swaps every malformed UTF-8 sequence for U+FFFD,
+    which corrupts the cold archive without any signal (ISSUE-M4-01). A strict
+    decode first detects malformed input; only on failure do we fall back to
+    ``"replace"`` and record how many characters were substituted. Valid UTF-8
+    files (even ones legitimately containing U+FFFD) take the strict path and are
+    never flagged.
+    """
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        replaced = text.count("\ufffd")
+        if encoding_stats is not None:
+            encoding_stats["files"] += 1
+            encoding_stats["chars"] += replaced
+            encoding_stats["detail"].append((path.name, replaced))
+        return text
+
+
 def clean_text(raw: str) -> str:
     """Remove UI paste placeholders and excessive blank lines while preserving original wording."""
     text = PASTED_NOISE_RE.sub("", raw or "")
@@ -111,8 +134,8 @@ def _records_from_json_obj(data: Any, source_name: str) -> list[dict[str, str]]:
     return rows
 
 
-def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace").strip()
+def _extract_from_json(path: pathlib.Path, encoding_stats: dict | None = None) -> list[dict[str, str]]:
+    text = _read_text_checked(path, encoding_stats).strip()
     if not text:
         return []
     try:
@@ -123,9 +146,9 @@ def _extract_from_json(path: pathlib.Path) -> list[dict[str, str]]:
     return _records_from_json_obj(data, path.name)
 
 
-def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
+def _extract_from_jsonl(path: pathlib.Path, encoding_stats: dict | None = None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
-    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+    for line_no, raw_line in enumerate(_read_text_checked(path, encoding_stats).splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
@@ -138,8 +161,8 @@ def _extract_from_jsonl(path: pathlib.Path) -> list[dict[str, str]]:
     return rows
 
 
-def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+def _extract_from_text(path: pathlib.Path, encoding_stats: dict | None = None) -> list[dict[str, str]]:
+    text = _read_text_checked(path, encoding_stats)
 
     # AfterChat / real exporter format:
     #   ## Metadata / - **Time:** 2026-11-18 ... / ## Conversation
@@ -204,7 +227,7 @@ def _extract_from_text(path: pathlib.Path) -> list[dict[str, str]]:
     return rows
 
 
-def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, int]:
+def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, Any]:
     """Scan raw_dir (.json/.jsonl/.md/.txt), deduplicate by full-text MD5, and store into SQLite FTS5 cold DB."""
     if not raw_dir.is_dir():
         raise FileNotFoundError(f"Raw directory not found: {raw_dir}")
@@ -233,17 +256,18 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
         total_raw = 0
         dedup_skipped = 0
         indexed = 0
+        encoding_stats: dict = {"files": 0, "chars": 0, "detail": []}
 
         for path in sorted(raw_dir.rglob("*")):
             if not path.is_file():
                 continue
             ext = path.suffix.lower()
             if ext == ".json":
-                extracted = _extract_from_json(path)
+                extracted = _extract_from_json(path, encoding_stats)
             elif ext == ".jsonl":
-                extracted = _extract_from_jsonl(path)
+                extracted = _extract_from_jsonl(path, encoding_stats)
             elif ext in {".md", ".txt"}:
-                extracted = _extract_from_text(path)
+                extracted = _extract_from_text(path, encoding_stats)
             else:
                 continue
 
@@ -266,7 +290,14 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, i
     finally:
         con.close()
 
-    return {"total_raw": total_raw, "dedup_skipped": dedup_skipped, "indexed": indexed}
+    return {
+        "total_raw": total_raw,
+        "dedup_skipped": dedup_skipped,
+        "indexed": indexed,
+        "encoding_replaced_files": encoding_stats["files"],
+        "encoding_replaced_chars": encoding_stats["chars"],
+        "encoding_replaced_detail": encoding_stats["detail"],
+    }
 
 
 def _escape_like(term: str) -> str:
@@ -336,6 +367,12 @@ def main() -> int:
             f"（total_raw={stats['total_raw']}）。"
         )
         print("不要把 indexed=0 当成成功；请检查导出文件是否真的落地，或先运行 scripts/00_export_wizard.py。")
+        return 2
+    if stats["encoding_replaced_files"] > 0:
+        for fname, count in stats["encoding_replaced_detail"]:
+            print(f"WARN: {fname} 含非法 UTF-8 字节，已替换 {count} 个字符；原文已失真，请修正编码后重跑。")
+        print(f"ENCODING_REPLACED: file={stats['encoding_replaced_files']} chars={stats['encoding_replaced_chars']}")
+        print("不要把含非法 UTF-8 的索引当成可信冷库；请将 raw 文件另存为 UTF-8 后重跑 01 清洗。")
         return 2
     print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
     if args.query:
