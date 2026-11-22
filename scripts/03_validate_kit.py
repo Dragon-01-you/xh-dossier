@@ -24,8 +24,10 @@ AI_CLICHES = [
     "每天进步1%复利37倍",
 ]
 
-# Match all Chinese template instruction placeholders like <填写...>, <一句话写清...>, <例如：...>, <用 scripts/...>
-PLACEHOLDER_RE = re.compile(r"<[\u4e00-\u9fff][^>\n]{1,100}>")
+# Match unfilled template instruction placeholders, both Chinese (<填写...>) and
+# ASCII (<YYYY-MM>, <your_name>, <TODO>). Exclude real autolinks such as
+# <https://example.com> and <mailto:...>.
+PLACEHOLDER_RE = re.compile(r"<(?!(?:https?://|mailto:))[^>\n]{2,100}>")
 # Detect accidentally leaked local user paths or secrets outside sanitized sample examples
 SENSITIVE_PATH_RE = re.compile(r"(?:[A-Za-z]:\\Users\\[^\\\s]+|/Users/[^/\s]+|/home/[^/\s]+|sk-[A-Za-z0-9]{16,})")
 

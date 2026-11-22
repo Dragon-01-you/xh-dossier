@@ -298,3 +298,28 @@ def test_wizard_cli_returns_zero_after_consent(
     monkeypatch.setattr(sys, "argv", ["00_export_wizard.py", "--browser", "edge", "--yes"])
 
     assert mod_wizard.main() == 0
+
+
+def test_strict_catches_ascii_placeholders_and_ignores_autolinks(tmp_path: pathlib.Path) -> None:
+    kit = tmp_path / "ascii_placeholder"
+    kit.mkdir()
+    for fname in mod_val.REQUIRED_KIT_FILES:
+        (kit / fname).write_text(
+            f"# {fname}\n\n" + "这是经过核实并亲口拍板的真实个人核心记录条目，用于测试验证完整性。" * 3,
+            encoding="utf-8",
+        )
+    (kit / "01-身份与当前主线.md").write_text(
+        (kit / "01-身份与当前主线.md").read_text(encoding="utf-8") + "\n- 出生年月：<YYYY-MM>",
+        encoding="utf-8",
+    )
+
+    ok_bad, msgs_bad = mod_val.validate_kit(kit, strict=True)
+    assert not ok_bad
+    assert any("<YYYY-MM>" in m for m in msgs_bad)
+
+    (kit / "01-身份与当前主线.md").write_text(
+        (kit / "01-身份与当前主线.md").read_text(encoding="utf-8").replace("<YYYY-MM>", "1999-09") + "\n- 参考：<https://example.com>",
+        encoding="utf-8",
+    )
+    ok_link, msgs_link = mod_val.validate_kit(kit, strict=True)
+    assert ok_link, msgs_link
