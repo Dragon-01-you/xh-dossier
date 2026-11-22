@@ -28,6 +28,16 @@ Scope: 以“零环境新用户”身份，从 clone 跑到发布门禁；不修
 - AfterChat 真实导出：`f6e091ff9577a2c1886cabc6a20461ce4d0696a859fa7cbf4c67a1baa1896028`（773 bytes）
 - 替代导出器产物：`1f5b5538e5b48693d8dbff92b457541ed4f18fe1ed67408f4578c30c4e270c7c`（783 bytes）
 
+## 补充：真实登录态内容（2026-11-22 21:50）
+
+- 登录成功（账号名已脱敏）；打开的真实会话《豆包CLI安装失败解决》**只有 2 条消息**。
+- 宿主浏览器限制：扩展商店 `ERR_CONNECTION_CLOSED`；任意下载 `ERR_ABORTED`。因此**无法取回真实导出文件**。
+- 改用 live DOM 抽取真实文本 + 重建 AfterChat 容器（不是真实导出产物）：
+  - 文件 SHA256 `c61dc04988f7129b669b00da716bf944fdeffb285918764d15bb1d6e5efd0533`
+  - `01`：2 条，1 user / 1 assistant，0 unknown
+  - `02`：`FOUR_WAY_OK records=2`，但 Way 1 / Way 3 / Way 2&4 **全部 0 候选**
+- 结论：低样本下 `FOUR_WAY_OK` 仍被打印，与 CLOUD-06 一致；真实数据没有让它变好。
+
 ## 复现前提
 
 - AfterChat 源码取自官方仓库 `AfterThink/AfterChat-Script`（AGPL-3.0），因 Greasyfork 在该网络不可达。
