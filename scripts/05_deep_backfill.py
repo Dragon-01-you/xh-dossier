@@ -96,6 +96,16 @@ BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "核心", "
                    "标准", "验收", "价值", "先", "再")
 BROAD_NEGATIVE = ("踩坑", "坑", "失败", "返工", "问题", "拖延", "没做", "没发",
                   "崩", "报错", "重来", "不行", "卡住", "放弃", "白做")
+PERSONAL_TITLE_MARKERS = ("情感", "歌", "心理", "恋爱", "锁", "不知道", "对话主题")
+L2_NOISE_MARKERS = ("练歌", "唱歌", "开锁", "破解", "绕过", "白嫖", "钥匙")
+L2_REQUEST_MARKERS = ("你可以", "你看", "那你看", "请", "帮我", "你先", "你给我",
+                      "你可以看", "看一下", "帮我看看", "深度找", "深度分析")
+
+
+def _source_title(source_file: str) -> str:
+    name = pathlib.Path(source_file).name
+    name = re.sub(r"^\d{8}-\d{6}-", "", name)
+    return re.sub(r"\.md$", "", name)
 
 # Signal type -> (target profile, section anchor)
 PROFILE_SECTION_MAP = {
@@ -422,6 +432,13 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
     money: list[L2Candidate] = []
     for r in records:
         if r["role"] != "user" or r["rec_id"] in coverage.covered_rec_ids:
+            continue
+        title = _source_title(r["source_file"])
+        if any(marker in title for marker in PERSONAL_TITLE_MARKERS):
+            continue
+        if any(marker in r["content"] for marker in L2_NOISE_MARKERS):
+            continue
+        if any(marker in r["content"][:80] for marker in L2_REQUEST_MARKERS):
             continue
         ok, _ = classify_narrative(r["content"])
         if not ok:

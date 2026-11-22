@@ -42,19 +42,23 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
 `build` 默认会把三路检索也跑一遍；只要 `--skip-retrieval` 才跳过。三路都是辅助召回，不是 6 份档案的替代品。
 
 产物：
-- `work/kit/`：6 份档案 + `_evidence/chat-lines.md`（每条都带行号原文）
+- `work/kit/`：6 份首轮档案 + `_evidence/chat-lines.md`（每条都带行号原文）
+- `work/kit_next/`：在首轮档案上追加“二层回流待确认区”的 6 份文件（机器候选，未签字）
 - `work/layer2/l2_candidates.md`：二层回流候选（全部待确认，未签字不生效）
 - `work/backfill_candidates.md`：一层四路匹配报告
+
+`build` 默认还会跑 `08_l2_apply.py`，把二层候选以 `[待确认]` + `原文/出处` 的待确认区写进 `work/kit_next/`；这不是签字，也不是把候选当事实。只想保留首轮时加 `--no-l2-apply`。
 
 这条命令只做**机器初稿**：`AGENTS.md` 会明确写 A/B/C 三级事实，`01`–`04` 的每条候选都带 `原文` + `出处`。它不替本人签字，也不把 assistant 的总结当用户记忆。
 
 `BUILD_OK` 不等于“可以交付”。下一步必须做一次**接手 Agent 复核**：
 
-1. 打开 `work/kit/_evidence/chat-lines.md`，逐条核对 `01`–`04` 的引用；
+1. 打开 `work/kit_next/_evidence/chat-lines.md`（或首轮 `work/kit/_evidence/chat-lines.md`），逐条核对 `01`–`04` 的引用；
 2. 把“请求/提示词/assistant 总结”误入 B 级的条目删掉，只保留本人自述、规则、判断、正反例；
-3. 保留 `[待确认]`，不要用常识补全；
-4. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
-5. 再把 `work/kit/` 交给下一个 Agent，而不是把机器初稿直接当定稿。
+3. 对 `work/kit_next/` 的“二层回流待确认区”，逐条判断：本人亲历？AI 代做/转述？已讲过？值得升格？不值得就删；
+4. 保留 `[待确认]`，不要用常识补全；本人签字后才可用 `backfill --apply-signed --confirm` 写入正式档案；
+5. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
+6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿。
 
 ## 3. 真实全流程（推荐顺序）
 
@@ -122,6 +126,15 @@ py -3.12 -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/ba
 ```
 
 `--apply-signed` 必须由本人对每条候选确认后再加；不要让 Agent 自己签字。
+
+Agent 可以先把候选机械地落成“未签字待确认区”，给本人复核：
+
+```powershell
+py -3.12 -X utf8 scripts/xh.py l2-apply --kit work/kit --l2 work/layer2 --out work/kit_next
+py -3.12 -X utf8 scripts/xh.py validate --kit work/kit_next --strict
+```
+
+`08_l2_apply.py` 只做三件事：复制 6 份档案、追加带 `[待确认]` + `原文/出处` 的待确认区、重跑严格校验。它不会填签字栏，也不会改正式档案。
 
 ### S6b 检索层（图 / 时间 / 关键词）
 

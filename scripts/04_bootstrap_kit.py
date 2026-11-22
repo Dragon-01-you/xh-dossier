@@ -47,20 +47,21 @@ MAINLINE_CUES = (
     "网站", "小程序", "工作流", "产品", "课程", "报告", "手册", "视频",
 )
 RULE_CUES = (
-    "必须", "禁止", "不要", "不能", "不许", "别", "记住", "铁律", "红线",
-    "规则", "底线", "一定", "绝不", "只", "先", "再",
+    "必须", "禁止", "不要", "不能", "不许", "记住", "铁律", "红线",
+    "规则", "底线", "绝不",
 )
 PRINCIPLE_CUES = (
-    "原则", "准则", "判断", "优先", "取舍", "核心", "关键", "标准",
-    "验收", "价值", "长期", "短期", "质量", "速度", "先", "再",
+    "原则", "准则", "判断", "优先", "取舍", "验收", "价值", "长期", "短期",
+    "质量", "速度",
 )
 NEGATIVE_CUES = (
     "踩坑", "坑", "失败", "错", "返工", "问题", "拖延", "没做", "没发",
     "崩", "报错", "重来", "不行", "卡住", "放弃", "白做", "浪费时间",
+    "没完成", "什么都没", "没听懂", "没达到", "有问题",
 )
 POSITIVE_CUES = (
-    "成功", "跑通", "有效", "对了", "完成", "解决", "好用", "满意",
-    "喜欢", "可以", "进步", "收获", "值得", "落地",
+    "成功", "跑通", "有效", "完成", "解决", "好用", "满意",
+    "喜欢", "进步", "收获", "值得", "落地",
 )
 
 # Material that is not the user's own durable view: pasted prompts, role cards,
@@ -90,7 +91,33 @@ SECRET_RE = re.compile(
     r"\s*[:：=]\s*[^\s，。；、）】]+"
 )
 AK_RE = re.compile(r"AKID[A-Za-z0-9]{10,}")
-SELF_RE = re.compile(r"(我是|我叫|我在做|我在学|我目前|我现在|我的项目|我的目标|我的主线|我的背景|我想做|我打算|我正在|我个人)")
+SELF_RE = re.compile(r"(我是|我叫|我在做|我在学|我目前|我现在|我的项目|我的目标|我的主线|我的背景|我想做|我打算|我正在|我个人|我要做|我这一生|对我来说)")
+# A message can be mostly a task instruction even when it contains "我". The
+# bootstrap generator must not turn "请你深度分析…" into an identity candidate.
+REQUEST_START_RE = re.compile(
+    r"^(?:请你|请帮我|帮我|你可以|你看|你先|你给我|给我|麻烦|按照|先把|先给|先做|先看|"
+    r"去看|去找|搜一下|搜索一下|建议|能不能|可以帮我|请深度|请对|请基于|请结合|"
+    r"请整理|请生成|请写|请列出|告诉我|说一下|我想请你|我需要你|你帮我|你帮我看看|"
+    r"你觉得|我觉得你可以|我觉得你|你这里|你那个|你这|你现在|你直接|你按|你按照|"
+    r"我想问|我想知道|我要你)"
+)
+TASK_CONTENT_RE = re.compile(
+    r"(请你|帮我|帮我看看|你可以|你看|你先|你去|你给我|给我|按上面|按照|深度分析|"
+    r"深度搜索|深度看|去GitHub|去B站|去网上|搜一下|检索一下|生成一份|整理并生成|"
+    r"导出给我|告诉我|说明一下|看一下|看一看|研究一下)"
+)
+EXPERIENCE_RE = re.compile(r"(我|我们|之前|上次|后来|结果|当时|这次|踩坑|跑通|返工)")
+
+
+def strip_request_tail(text: str) -> str:
+    """Keep the declarative first half, drop a trailing instruction clause."""
+    for marker in ("，请", "。请", "；请", "所以请", "然后请", "并请"):
+        if marker in text:
+            head = text.split(marker, 1)[0].strip()
+            if len(head) >= 12:
+                return head
+    return text
+
 WORK_TITLE_MARKERS = (
     "项目", "知识库", "AI", "3D", "PPT", "报告", "市场", "剪辑", "Agent",
     "技能", "GitHub", "Obsidian", "排课", "播客", "设计", "工作流", "文件",
@@ -131,10 +158,11 @@ class Record:
     content: str
     source_file: str
     evidence_line: int = 0
+    display: str = ""
 
     @property
     def quote(self) -> str:
-        return self.content[:220]
+        return self.display or self.content[:220]
 
 
 def top_sources(records: list[Record], limit: int = 10) -> list[tuple[str, int]]:
@@ -218,12 +246,94 @@ def _first_sentence(text: str, limit: int = 68) -> str:
     return s[: limit - 1].rstrip("，,、 ") + "…"
 
 
-def _select(records: list[Record], cues: tuple[str, ...], used: set[str], limit: int = MAX_ITEMS) -> list[Record]:
+def candidate_sentence(text: str, kind: str) -> str:
+    """Pick one declarative, self-relevant sentence; drop task instructions.
+
+    This is intentionally rule-based. It either returns a verbatim sentence that
+    exists in the user message, or "" (no fabrication, no paraphrase).
+    """
+    raw = unicodedata.normalize("NFKC", text or "")
+    parts = [p.strip() for p in re.split(r"(?<=[。！？!?；;])", raw) if p.strip()]
+    best = ""
+    best_score = -1
+    for part in parts:
+        part = re.sub(r"^[#>*\-\s]+", "", part).strip()
+        part = re.sub(r"\s+", " ", part)
+        part = strip_request_tail(part)
+        if len(part) < 12 or len(part) > 220:
+            continue
+        if any(mark in part for mark in ("✅", "├", "└", "│", "|", "**")):
+            continue
+        if part.count(",") + part.count("、") > 6:
+            continue
+        if REQUEST_START_RE.search(part):
+            continue
+        if TASK_CONTENT_RE.search(part) and not SELF_RE.search(part):
+            continue
+        if kind in ("identity", "mainline") and part.startswith(("然后", "所以", "但是", "那", "这个", "那个", "还有", "另外")):
+            continue
+        if kind == "identity":
+            if not SELF_RE.search(part):
+                continue
+            s = score(part, IDENTITY_CUES)
+        elif kind == "mainline":
+            if not (SELF_RE.search(part) or "我的" in part):
+                continue
+            if part.endswith(("在", "和", "与", "然后", "因为", "所以", "我是在")):
+                continue
+            if "我觉得" in part:
+                continue
+            s = score(part, MAINLINE_CUES)
+        elif kind == "principle":
+            if "你可以" in part or "你看" in part or "我们这里可以" in part:
+                continue
+            if len(part) > 120:
+                continue
+            if not re.search(r"(原则|准则|优先|取舍|验收|价值|长期|短期|质量|速度)", part):
+                continue
+            if not re.search(r"(我|我们|原则|准则|判断|优先|取舍)", part):
+                continue
+            s = score(part, PRINCIPLE_CUES)
+        elif kind == "rule":
+            if "你可以" in part:
+                continue
+            if not re.search(r"(必须|禁止|不要|不能|不许|记住|铁律|红线|规则|底线|绝不)", part):
+                continue
+            s = score(part, RULE_CUES)
+        elif kind == "negative":
+            if not EXPERIENCE_RE.search(part):
+                continue
+            s = score(part, NEGATIVE_CUES)
+        elif kind == "positive":
+            if not EXPERIENCE_RE.search(part):
+                continue
+            if any(cue in part for cue in NEGATIVE_CUES):
+                continue
+            s = score(part, POSITIVE_CUES)
+        else:
+            continue
+        if s <= 0:
+            continue
+        if s > best_score or (s == best_score and len(part) > len(best)):
+            best, best_score = part, s
+    return best
+
+
+def _select(records: list[Record], cues: tuple[str, ...], used: set[str],
+            limit: int = MAX_ITEMS, kind: str = "") -> list[Record]:
     ranked = sorted(
         (r for r in records if r.rec_id not in used),
         key=lambda r: (-score(r.content, cues), -len(r.content), r.rec_id),
     )
-    picked = [r for r in ranked if score(r.content, cues) > 0][:limit]
+    picked: list[Record] = []
+    for r in ranked:
+        if len(picked) >= limit:
+            break
+        sentence = candidate_sentence(r.content, kind) if kind else ""
+        if not sentence:
+            continue
+        r.display = sentence
+        picked.append(r)
     # If a category is thin, do not pad it with unrelated text; the section will
     # say "样本不足" instead. That is honest and keeps quality from collapsing.
     used.update(r.rec_id for r in picked)
@@ -237,7 +347,8 @@ def _quote_line(record: Record) -> str:
 
 
 def _bullet(record: Record, idx: int) -> str:
-    return f"- **候选-{idx:02d}** {_first_sentence(record.content)} ｜ {_quote_line(record)}"
+    heading = record.display or _first_sentence(record.content)
+    return f"- **候选-{idx:02d}** {heading} ｜ {_quote_line(record)}"
 
 
 def _pending(record: Record, question: str) -> str:
@@ -535,17 +646,18 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
     _build_evidence(records, out_dir / EVIDENCE_REL)
 
     used: set[str] = set()
-    identity_pool = [r for r in records if SELF_RE.search(r.content[:140])]
-    identity = _select(identity_pool, IDENTITY_CUES, used)
+    identity_pool = [r for r in records if SELF_RE.search(r.content[:160])]
+    identity = _select(identity_pool, IDENTITY_CUES, used, kind="identity")
     mainline_pool = [r for r in records if SELF_RE.search(r.content) or score(r.content, MAINLINE_CUES) >= 2]
-    mainline = _select(mainline_pool, MAINLINE_CUES, used)
-    principles = _select(records, PRINCIPLE_CUES, used)
-    rules = _select(records, RULE_CUES, used)
-    negatives = _select(records, NEGATIVE_CUES, used)
-    positives = _select(records, POSITIVE_CUES, used)
+    mainline = _select(mainline_pool, MAINLINE_CUES, used, kind="mainline")
+    principles = _select(records, PRINCIPLE_CUES, used, kind="principle")
+    rules = _select(records, RULE_CUES, used, kind="rule")
+    negatives = _select(records, NEGATIVE_CUES, used, kind="negative")
+    positives = _select(records, POSITIVE_CUES, used, kind="positive")
     # Thin sections get a second, less strict pass from the remaining pool.
     if len(positives) < 3:
-        positives += [r for r in _select(records, MAINLINE_CUES + POSITIVE_CUES, used, 3 - len(positives))
+        positives += [r for r in _select(records, MAINLINE_CUES + POSITIVE_CUES, used,
+                                          3 - len(positives), kind="positive")
                       if r not in positives]
 
     top_sources_list = top_sources(records)

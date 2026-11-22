@@ -249,6 +249,14 @@ def build(args: argparse.Namespace) -> int:
                    "--db", str(db), "--out", str(l2), "--broad"])
         if rc != 0:
             return rc
+    apply_script = _script("08_l2_apply.py")
+    if args.apply_unsigned and apply_script.is_file() and (l2 / "l2_profile_patches").is_dir():
+        kit_next = pathlib.Path(args.kit_next).expanduser() if args.kit_next else kit.parent / "kit_next"
+        rc = _run([sys.executable, "-X", "utf8", str(apply_script),
+                   "--kit", str(kit), "--l2", str(l2), "--out", str(kit_next)])
+        if rc != 0:
+            return rc
+        kit = kit_next
     if not args.skip_retrieval and all(_script(n).is_file() for n in ("05_temporal_index.py", "06_graph_index.py", "07_recall_time_graph.py")):
         for step in (
             [sys.executable, "-X", "utf8", str(_script("05_temporal_index.py")), "--db", str(db), "--action", "backfill"],
@@ -267,6 +275,17 @@ def build(args: argparse.Namespace) -> int:
     print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
     print("receipt:", path)
     return rc
+
+
+def l2_apply(args: argparse.Namespace) -> int:
+    script = _script("08_l2_apply.py")
+    if not script.is_file():
+        print("L2_APPLY_MISSING: scripts/08_l2_apply.py is not in this checkout")
+        return 2
+    return _run([sys.executable, "-X", "utf8", str(script),
+                 "--kit", str(pathlib.Path(args.kit).expanduser()),
+                 "--l2", str(pathlib.Path(args.l2).expanduser()),
+                 "--out", str(pathlib.Path(args.out).expanduser())])
 
 
 def retrieval(args: argparse.Namespace) -> int:
@@ -404,7 +423,19 @@ def main() -> int:
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
     p.add_argument("--query", default="项目", help="keyword used for the final FTS recall step")
     p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
+    p.add_argument("--apply-unsigned", dest="apply_unsigned", action="store_true", default=True,
+                   help="apply L2 candidates as a pending zone in kit_next (default)")
+    p.add_argument("--no-l2-apply", dest="apply_unsigned", action="store_false",
+                   help="keep the first-pass kit unchanged")
+    p.add_argument("--kit-next", default=None,
+                   help="output of the unsigned layer-2 pending zone (default: <kit parent>/kit_next)")
     p.set_defaults(func=build)
+
+    p = sub.add_parser("l2-apply", help="apply L2 candidates as an unsigned pending zone")
+    p.add_argument("--kit", default=str(WORK / "kit"))
+    p.add_argument("--l2", default=str(WORK / "layer2"))
+    p.add_argument("--out", default=str(WORK / "kit_next"))
+    p.set_defaults(func=l2_apply)
 
     p = sub.add_parser("retrieval", help="build temporal/graph indexes and run recall")
     p.add_argument("--db", default=str(WORK / "unified_index.db"))
