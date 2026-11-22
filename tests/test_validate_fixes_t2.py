@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Issue #2 regressions: cliché bypass and impossible calendar dates."""
+
+import importlib.util
+import pathlib
+
+SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+spec = importlib.util.spec_from_file_location("validate_kit_t2", SCRIPTS / "03_validate_kit.py")
+vk = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(vk)
+
+KIT_NAMES = list(vk.REQUIRED_KIT_FILES)
+
+
+def make_kit(tmp_path: pathlib.Path, extra_by_file: dict[str, str] | None = None) -> pathlib.Path:
+    for name in KIT_NAMES:
+        (tmp_path / name).write_text(
+            f"# {name}\n\n这是一份足够长的正常档案内容，用于通过最短长度检查。" * 3,
+            encoding="utf-8",
+        )
+    for name, extra in (extra_by_file or {}).items():
+        path = tmp_path / name
+        path.write_text(path.read_text(encoding="utf-8") + "\n" + extra, encoding="utf-8")
+    return tmp_path
+
+
+def test_cliche_in_rule_description_is_not_exempt(tmp_path: pathlib.Path) -> None:
+    # Old bug: a line containing 禁止 was skipped wholesale.
+    kit = make_kit(tmp_path, {"AGENTS.md": "我们禁止说这是一个非常好的问题这种水话。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("CLICHE" in d for d in diags), diags
+
+
+def test_quoted_cliche_example_adjacent_to_rule_is_allowed(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"AGENTS.md": "禁用水话：“这是一个非常好的问题”这类。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_distant_banned_word_does_not_exempt_quote(tmp_path: pathlib.Path) -> None:
+    # Review E4: “...” 这是禁止的腔调 must still fail; verb is not adjacent.
+    kit = make_kit(tmp_path, {"AGENTS.md": "“这是一个非常好的问题”这是禁止的腔调。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("CLICHE" in d for d in diags), diags
+
+
+def test_all_chinese_quote_styles_can_be_rule_examples(tmp_path: pathlib.Path) -> None:
+    for open_q, close_q in (("‘", "’"), ("《", "》"), ("「", "」"), ("『", "』"), ("〈", "〉")):
+        kit = make_kit(tmp_path, {"AGENTS.md": f"禁止说{open_q}这是一个非常好的问题{close_q}这类水话。"})
+        ok, diags = vk.validate_kit(kit)
+        assert ok is True, (open_q, diags)
+
+
+def test_real_kit_style_verb_xie_allows_quoted_example(tmp_path: pathlib.Path) -> None:
+    # Found on the real 6-file kit: 严禁写「这是一个非常好的问题」…
+    kit = make_kit(tmp_path, {"AGENTS.md": "严禁写「这是一个非常好的问题」这类水话。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_impossible_calendar_date_fails(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 事件日期：2025-02-30"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("INVALID_DATE" in d and "2025-02-30" in d for d in diags), diags
+
+
+def test_valid_calendar_date_passes(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 事件日期：2024-02-29"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_month_only_date_is_not_treated_as_impossible(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 月份：2025-02"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_natural_language_uncertainty_fails(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 我开始做这个项目的日期记不清了。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("UNCERTAIN_SEMANTIC" in d for d in diags), diags
+
+
+def test_spaced_uncertainty_fails_after_nfkc(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 这件事待 核 实后再写。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False
+    assert any("UNCERTAIN_SEMANTIC" in d for d in diags), diags
+
+
+def test_uncertainty_degree_rule_is_not_flagged(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"AGENTS.md": "- 保留不确定度词，绝不瞎编肯定。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_natural_language_uncertainty_passes_when_marked(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(
+        tmp_path,
+        {"01-身份与当前主线.md": "- [待确认] 开始日期 ｜ 原文：「大概是秋天」 ｜ 出处：raw/chat.md:12"},
+    )
+    raw = kit / "raw"
+    raw.mkdir()
+    (raw / "chat.md").write_text(
+        "\n".join(["x"] * 11 + ["User: 大概是秋天开始做的"]), encoding="utf-8"
+    )
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+
+
+def test_uncertain_semantic_rule_line_is_not_flagged(tmp_path: pathlib.Path) -> None:
+    # A rule that says "记不清就标 [待确认]" is documentation, not a claim.
+    kit = make_kit(tmp_path, {"AGENTS.md": "- 记不清日期时先标 [待确认]，留待回填。"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is True, diags
+def test_impossible_dates_hard_fail_in_both_modes(tmp_path: pathlib.Path) -> None:
+    # Regression lock: 2/30, month 13, 2/31 must hard fail in non-strict AND strict.
+    # This gate must not be weakened later into a strict-only warning or a soft INFO.
+    for bad in ("2026-02-30", "2025-13-01", "2026-02-31"):
+        case_dir = tmp_path / bad.replace("-", "_")
+        case_dir.mkdir()
+        kit = make_kit(case_dir, {"01-身份与当前主线.md": f"- 事件日期：{bad}"})
+        for strict in (False, True):
+            ok, diags = vk.validate_kit(kit, strict=strict)
+            assert ok is False, (bad, strict, diags)
+            assert any("INVALID_DATE" in d and bad in d for d in diags), (bad, strict, diags)
+
+
+def test_cjk_impossible_date_hard_fails(tmp_path: pathlib.Path) -> None:
+    kit = make_kit(tmp_path, {"01-身份与当前主线.md": "- 事件日期：2026年2月30日"})
+    ok, diags = vk.validate_kit(kit)
+    assert ok is False, diags
+    assert any("INVALID_DATE" in d and "2026年2月30日" in d for d in diags), diags
+
+
+def test_exact_cliche_bypass_phrase_is_caught(tmp_path: pathlib.Path) -> None:
+    # Issue #2 Bug A exact sample: banned phrase directly after 禁止说, no quotes around
+    # it. The rule verb must NOT exempt the cliché; CLICHE must fire in both modes.
+    kit = make_kit(tmp_path, {"AGENTS.md": "禁止说这是一个非常好的问题。"})
+    for strict in (False, True):
+        ok, diags = vk.validate_kit(kit, strict=strict)
+        assert ok is False, (strict, diags)
+        assert any("CLICHE" in d and "这是一个非常好的问题" in d for d in diags), (strict, diags)

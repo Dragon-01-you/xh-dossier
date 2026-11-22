@@ -30,6 +30,11 @@ def _kit(tmp_path: pathlib.Path, marker_line: str) -> pathlib.Path:
     (kit / "02-核心判断准则.md").write_text(
         f"# 02\n\n{BODY}\n{marker_line}\n", encoding="utf-8"
     )
+    # Issue #15: 出处 must resolve to a real line, not just contain "出处：".
+    src = kit / "flomo快照_2026-10-25.md"
+    rows = ["# flomo snapshot", "", "---"] + [f"line {i}" for i in range(4, 61)]
+    rows.append("User: 一直在做对讲，把配色之类的全部弄好")
+    src.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return kit
 
 
@@ -92,3 +97,51 @@ def test_half_source_marker_still_fails(tmp_path: pathlib.Path) -> None:
     )
     assert not ok
     assert any("PENDING_UNTRACEABLE" in m for m in msgs)
+
+
+def test_fabricated_source_file_fails(tmp_path: pathlib.Path) -> None:
+    # Issue #15: 出处：fake.md:9 used to pass because only the word 出处 existed.
+    line = "[待确认] 疑点 ｜ 原文：「一直在做对讲」 ｜ 出处：fake.md:9"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_MISSING" in m for m in msgs), msgs
+
+
+def test_source_line_out_of_range_fails(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「一直在做对讲」 ｜ 出处：flomo快照_2026-10-25.md:999"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_LINE_OUT_OF_RANGE" in m for m in msgs), msgs
+
+
+def test_source_quote_mismatch_fails(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「这句原文根本不在文件里」 ｜ 出处：flomo快照_2026-10-25.md:61"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_QUOTE_MISMATCH" in m for m in msgs), msgs
+
+
+def test_source_root_extra_dir_resolves(tmp_path: pathlib.Path) -> None:
+    source_root = tmp_path / "raw"
+    source_root.mkdir()
+    (source_root / "chat.md").write_text(
+        "\n".join(["x"] * 11 + ["User: 一直在做对讲，把配色之类的全部弄好"]),
+        encoding="utf-8",
+    )
+    line = "[待确认] 疑点 ｜ 原文：「一直在做对讲」 ｜ 出处：chat.md:12"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True, source_roots=[source_root])
+    assert ok, msgs
+
+
+def test_dotdot_source_is_traversal(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「不该读到」 ｜ 出处：../outside.md:1"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_TRAVERSAL" in m for m in msgs), msgs
+
+
+def test_absolute_source_is_traversal(tmp_path: pathlib.Path) -> None:
+    line = "[待确认] 疑点 ｜ 原文：「不该读到」 ｜ 出处：C:\\Windows\\win.ini:1"
+    ok, msgs = mod_val.validate_kit(_kit(tmp_path, line), strict=True)
+    assert not ok
+    assert any("PENDING_SOURCE_TRAVERSAL" in m for m in msgs), msgs
