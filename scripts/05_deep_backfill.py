@@ -32,6 +32,7 @@ import json
 import pathlib
 import re
 import sqlite3
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
@@ -46,7 +47,15 @@ STOPWORDS = {
     "可以", "看一下", "一下", "我觉得", "这里", "的话", "那个", "这个", "其实",
     "就是", "可能", "应该", "一些", "进行", "相关", "对应", "一个", "然后",
     "反正", "好像", "有点", "我们", "什么", "怎么", "这些", "那些", "已经",
+    # Phrase mining (§4.1): pronoun / filler sequences that surface as cross-doc
+    # "themes" but carry no content — Top20 must be free of 我/你/在/了…
+    "现在", "已经", "已", "给你", "我已", "咱们", "有没有", "看一",
 }
+# Grams starting with a first/second-person pronoun are spoken filler, not a
+# mined content phrase.
+PRONOUN_PREFIXES = ("我", "你", "咱", "我们", "你们")
+# Bare grammatical particles inside a mark mean the n-gram is spoken filler.
+GRAM_PARTICLES = set("了的是")
 # Common content-word characters (verbs/nouns/adjectives) — filters out pure
 # auxiliary phrases. Extensible; jieba.posseg could replace this if available.
 CONTENT_HINT = set(
@@ -55,13 +64,20 @@ CONTENT_HINT = set(
     "改错失败成功试换删改建读看写说听做买卖教练习记录整理发布解释重新开始结束"
 )
 
-NON_PERSONAL_PREFIX = (
-    "你是一名", "你是", "绝对铁律", "任务:", "任务：", "# 角色", "## 角色",
+# Full-text non-personal material signals (design §4.2). After normalization
+# (NFKC full-width -> half-width, whitespace stripped, lowercased) these match as
+# SUBSTRING anywhere in the record: a pasted prompt / podcast / summary may place
+# the cue mid-text, so a startswith prefix list can be bypassed (review F3).
+NON_PERSONAL_PROMPT_TOKENS = (
+    "你是一名", "你是我的", "请扮演", "扮演一下", "绝对铁律",
+    "任务:", "任务：", "#角色", "##角色",
 )
-NON_PERSONAL_INNER = (
-    "📑 智能总结", "Thought Process", "播客稿", "播客访谈", "感谢收听",
-    "skill://", "plugin://", "[操作电脑]", "[Seed Audio", "[GitHub]",
-    "内容类型", "内容总结", "时长", "https://", "http://",
+NON_PERSONAL_PREFIX = ("你是", "绝对铁律", "任务:", "任务：", "# 角色", "## 角色")
+NON_PERSONAL_MATERIAL_TOKENS = (
+    "智能总结", "内容总结", "thoughtprocess", "播客", "podcast", "欢迎收听",
+    "感谢收听", "收听", "本期", "转写", "字幕", "访谈",
+    "skill://", "plugin://", "[操作电脑]", "[seedaudio", "[github]",
+    "内容类型", "时长", "https://", "http://",
 )
 NEGATION = ("先不要", "不要", "先别", "别直接", "禁止", "绝不", "别帮我")
 SUBJECT_USER_MISS = ("我没听懂", "我没看懂", "没明白你说的")
@@ -117,6 +133,7 @@ class L2Candidate:
     excerpt: str
     source_file: str
     cross_ref: str = "none"
+    phrase_hits: int = 0
     needs_llm: bool = True
     status: Status = "pending"
 
@@ -126,18 +143,66 @@ class L2Candidate:
 def load_profiles(profile_dir: pathlib.Path) -> dict[str, str]:
     if not profile_dir.is_dir():
         raise FileNotFoundError(f"PROFILE_DIR_MISSING: {profile_dir}")
+    base = profile_dir.resolve()
     out: dict[str, str] = {}
     for name in PROFILE_FILES:
-        p = profile_dir / name
+        p = (profile_dir / name).resolve()
+        if p.parent != base:
+            raise ValueError(f"PROFILE_TARGET_ESCAPE: {name!r} leaves profiles dir")
         if not p.is_file():
             # The 6th file has a known naming variant; accept both.
             alt = profile_dir / "04-正反例避坑账.md"
             if name.startswith("04-") and alt.is_file():
-                p = alt
+                p = alt.resolve()
+                if p.parent != base:
+                    raise ValueError(f"PROFILE_TARGET_ESCAPE: alt 04 leaves profiles dir")
             else:
                 raise FileNotFoundError(f"PROFILE_FILE_MISSING: {name}")
         out[name] = p.read_text(encoding="utf-8", errors="replace")
     return out
+
+
+# Ledger-supplied target_profile is an editable file input — never trusted.
+# Review F1/F2: only the fixed 6-file whitelist may be written, and the
+# resolved path must stay inside profiles_dir (rejects `..`, absolute paths,
+# `./name`, `sub/../name`, symlink escape).
+PROFILE_WHITELIST = frozenset(PROFILE_FILES)
+# Template name -> canonical hot-load name. The 6th profile ships under two
+# names in the wild (real base `04-反面案例清单.md` vs template
+# `04-正反例避坑账.md`); both must map to the SAME on-disk 04 file.
+PROFILE_TEMPLATE_ALIASES = {"04-正反例避坑账.md": "04-反面案例清单.md"}
+
+
+def _canonical_profile_name(name: str) -> str:
+    return PROFILE_TEMPLATE_ALIASES.get(name, name)
+
+
+def safe_profile_target(target: str, profiles_dir: pathlib.Path) -> pathlib.Path:
+    """Validate a ledger target against the whitelist + containment.
+
+    Raises ValueError (PROFILE_TARGET_*) on any traversal / non-whitelisted
+    name / escape. Returns the resolved on-disk path otherwise. The template
+    alias 04 name resolves to the same canonical 04 file as the real name.
+    """
+    if not target or not isinstance(target, str):
+        raise ValueError("PROFILE_TARGET_MISSING: empty target_profile")
+    pure = pathlib.PurePosixPath(target.replace("\\", "/"))
+    if pure.is_absolute() or ".." in pure.parts:
+        raise ValueError(f"PROFILE_TARGET_TRAVERSAL: {target!r}")
+    name = pure.name
+    canonical = _canonical_profile_name(name)
+    if canonical not in PROFILE_WHITELIST:
+        raise ValueError(f"PROFILE_TARGET_NOT_WHITELISTED: {name!r}")
+    base = profiles_dir.resolve()
+    candidate = profiles_dir / canonical
+    # Fall back to the template alias file only when the canonical file is
+    # absent (template-only kit); both names still resolve inside base.
+    if not candidate.is_file() and name in PROFILE_TEMPLATE_ALIASES:
+        candidate = profiles_dir / name
+    actual = candidate.resolve()
+    if actual.parent != base:
+        raise ValueError(f"PROFILE_TARGET_ESCAPE: {target!r} leaves profiles dir")
+    return actual
 
 
 def build_coverage_index(profiles: dict[str, str]) -> CoverageIndex:
@@ -161,6 +226,13 @@ def parse_first_pass(backfill_md: pathlib.Path) -> FirstPassIndex:
     if not backfill_md.is_file():
         raise FileNotFoundError(f"MISSING_FIRST_PASS_INPUT: {backfill_md}")
     text = backfill_md.read_text(encoding="utf-8", errors="replace")
+    # F8: a file that exists but is empty/placeholder is NOT a real layer-1
+    # report. Without a real B input this degrades to the 04 prototype (design
+    # §3.1). Reject instead of silently producing untold candidates.
+    if not text.strip() or not (REC_RE.search(text) or "[待确认]" in text):
+        raise ValueError(
+            f"MISSING_FIRST_PASS_INPUT: layer-1 report empty or placeholder: {backfill_md}"
+        )
     fp = FirstPassIndex()
     fp.pending_rec_ids = set(REC_RE.findall(text))
     claims: dict[str, list[str]] = {}
@@ -193,14 +265,31 @@ def load_records(db_path: pathlib.Path) -> list[dict[str, str]]:
 
 # ---------------------------------------------------------------- gates
 
+def _normalize_text(text: str) -> str:
+    """NFKC full-width->half-width, drop all whitespace, lowercase for matching."""
+    if not text:
+        return ""
+    t = unicodedata.normalize("NFKC", text)
+    t = "".join(ch for ch in t if not ch.isspace())
+    return t.lower()
+
+
 def classify_narrative(content: str) -> tuple[bool, str]:
-    """Return (is_personal_experience, reason). Design §4.2."""
+    """Return (is_personal_experience, reason). Design §4.2.
+
+    Non-personal cues are matched on the NORMALIZED full text (substring), not
+    just on the prefix: pasted prompts / podcast transcripts / summaries can
+    place the cue mid-text (review F3).
+    """
     c = content.strip()
     if len(c) > 600:
         return False, "non_personal:too_long"
+    n = _normalize_text(c)
+    if any(tok in n for tok in NON_PERSONAL_PROMPT_TOKENS):
+        return False, "non_personal:prompt_prefix"
     if any(c.startswith(p) for p in NON_PERSONAL_PREFIX):
         return False, "non_personal:prompt_prefix"
-    if any(tok in c for tok in NON_PERSONAL_INNER):
+    if any(tok in n for tok in NON_PERSONAL_MATERIAL_TOKENS):
         return False, "non_personal:ai_or_material"
     if not any(m in c for m in EXPERIENCE_MARKERS):
         return False, "non_personal:no_first_person"
@@ -284,6 +373,10 @@ def mine_repeated_phrases(records: list[dict[str, str]], min_docs: int = 2,
                     # "可以看一下" through because no single char is a stopword).
                     if any(sw in g for sw in STOPWORDS):
                         continue
+                    if g.startswith(PRONOUN_PREFIXES):
+                        continue
+                    if any(ch in GRAM_PARTICLES for ch in g):
+                        continue
                     if not any(ch in CONTENT_HINT for ch in g):
                         continue
                     docs_by_phrase.setdefault(g, set()).add(r["source_file"])
@@ -306,9 +399,16 @@ def _topic_overlap(content: str, terms: set[str]) -> int:
 
 
 def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
-                    first_pass: FirstPassIndex) -> tuple[list[L2Candidate], list[dict[str, str]]]:
-    """Design §4.4 C0~C3. Returns (candidates, dropped_with_reason)."""
+                    first_pass: FirstPassIndex
+                    ) -> tuple[list[L2Candidate], list[dict[str, str]], list[L2Candidate]]:
+    """Design §4.4 C0~C3. Returns (candidates, dropped_with_reason, cross_refs).
+
+    C1 items already sitting in a layer-1 [待确认] list are cross-references,
+    NOT duplicated as formal candidates (review F6): they are returned
+    separately in `cross_refs` and excluded from the candidate count.
+    """
     candidates: list[L2Candidate] = []
+    cross_refs: list[L2Candidate] = []
     dropped: list[dict[str, str]] = []
     phrases = mine_repeated_phrases(records)
     repeated_texts = {p.phrase for p in phrases}
@@ -339,14 +439,10 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
         if covered_any:
             dropped.append({"rec_id": r["rec_id"], "reason": "C0_topic_covered"})
             continue
-        cross_ref = "none"
-        # C1 — already a layer-1 [待确认] item: cross-reference, do not duplicate
-        if r["rec_id"] in first_pass.pending_rec_ids:
-            cross_ref = "L1"
         # C2 — claimed by a REAL layer-1 pattern: do not re-produce
         real_claims = [c for c in first_pass.claims.get(r["rec_id"], [])
                        if c != "(keyword-only hit)"]
-        if real_claims and cross_ref != "L1":
+        if real_claims:
             dropped.append({"rec_id": r["rec_id"], "reason": "C2_claimed_by_L1_pattern"})
             continue
 
@@ -362,25 +458,40 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
             stype = "complaint"
         target, anchor = PROFILE_SECTION_MAP[stype]
         excerpt = re.sub(r"\s+", " ", r["content"])[:200]
-
-        candidates.append(L2Candidate(
+        phrase_hits = sum(1 for p in repeated_texts if p in r["content"])
+        evidence = (f"抱怨{int(signals['complaint'])}/错误{int(signals['mistake'])}; "
+                    f"门禁过滤={','.join(str(x) for x in signals['filtered']) or '无'}; "
+                    f"跨对话短语命中={phrase_hits}")
+        candidate = L2Candidate(
             candidate_id="",  # assigned after sort
             rec_id=r["rec_id"],
             created_at=r["created_at"],
             signal=stype,
             target_profile=target,
             section_anchor=anchor,
-            evidence=(f"抱怨{int(signals['complaint'])}/错误{int(signals['mistake'])}; "
-                      f"门禁过滤={','.join(str(x) for x in signals['filtered']) or '无'}; "
-                      f"跨对话短语命中={sum(1 for p in repeated_texts if p in r['content'])}"),
+            evidence=evidence,
             excerpt=excerpt,
             source_file=r["source_file"],
-            cross_ref=cross_ref,
-        ))
-    candidates.sort(key=lambda c: (c.cross_ref != "L1", c.rec_id))
+            cross_ref="none",
+            phrase_hits=phrase_hits,
+        )
+        # C1 — already a layer-1 [待确认] item: cross-reference only, not a
+        # duplicated candidate (review F6).
+        if r["rec_id"] in first_pass.pending_rec_ids:
+            candidate.cross_ref = "L1"
+            cross_refs.append(candidate)
+        else:
+            candidates.append(candidate)
+    # F5 (partial): cross-document phrase hits drive candidate RANKING (first
+    # class sort key) and the evidence field. Inclusion/exclusion still rests
+    # on the complaint/mistake cues; phrase mining alone does not yet admit a
+    # record — see design doc §4.1 limitation note.
+    candidates.sort(key=lambda c: (-c.phrase_hits, c.rec_id))
     for i, c in enumerate(candidates, 1):
         c.candidate_id = f"L2-{i:04d}"
-    return candidates, dropped
+    for i, c in enumerate(cross_refs, 1):
+        c.candidate_id = f"L1X-{i:04d}"
+    return candidates, dropped, cross_refs
 
 
 # ---------------------------------------------------------------- outputs
@@ -391,10 +502,11 @@ WARNING_BANNER = (
 )
 
 
-def render_candidates(candidates: list[L2Candidate], dropped: list[dict[str, str]] | None = None) -> str:
+def render_candidates(candidates: list[L2Candidate], dropped: list[dict[str, str]] | None = None,
+                      cross_refs: list[L2Candidate] | None = None) -> str:
+    cross_refs = cross_refs or []
     lines = ["# L2 二层深度回流候选报告", "", WARNING_BANNER,
-             f"> 共 `{len(candidates)}` 条候选（其中 L1 交叉引用 "
-             f"`{sum(1 for c in candidates if c.cross_ref == 'L1')}` 条）。", ""]
+             f"> 共 `{len(candidates)}` 条候选（真正 untold；不含 L1 交叉引用）。", ""]
     needs_llm = [d for d in (dropped or []) if d["reason"] == "needs_llm_ambiguous"]
     if needs_llm:
         lines.extend(["## 附：需语义判断（needs_llm · 规则拿不准，未列入候选）", ""])
@@ -411,6 +523,19 @@ def render_candidates(candidates: list[L2Candidate], dropped: list[dict[str, str
             f"- **原文摘录**：> {c.excerpt}",
             "",
         ])
+    if cross_refs:
+        lines.extend([
+            f"## 附：与 L1 交叉引用（`{len(cross_refs)}` 条 · 已在一层待确认清单，不重复产出）",
+            "",
+        ])
+        for c in cross_refs:
+            lines.extend([
+                f"### {c.candidate_id} [{c.rec_id} | {c.created_at}]",
+                f"- **信号**：{c.signal} ｜ **L1 关系**：{c.cross_ref}",
+                f"- **溯源**：`source_file={c.source_file}`",
+                f"- **原文摘录**：> {c.excerpt}",
+                "",
+            ])
     return "\n".join(lines)
 
 
@@ -466,16 +591,31 @@ _SIGN_STATE: dict[str, set[Status]] = {
 def update_review(path: pathlib.Path, candidate_id: str, status: Status,
                   reviewer: str, note: str = "") -> dict:
     ledger = load_review_ledger(path)
-    row = ledger.get(candidate_id, {"candidate_id": candidate_id, "layer": 2, "status": "pending"})
+    row = ledger.get(candidate_id, {"candidate_id": candidate_id, "layer": 2, "status": "pending",
+                                   "needs_llm": False, "needs_llm_resolved": False})
     old = row.get("status", "pending")
     if status not in _SIGN_STATE.get(old, set()):
         raise ValueError(f"ILLEGAL_STATE_TRANSITION: {old} -> {status} for {candidate_id}")
-    if status == "signed" and not reviewer:
-        raise ValueError("SIGNATURE_REQUIRES_REVIEWER: signed needs --by")
+    if status == "signed":
+        # F4: a needs_llm candidate whose open question was never explicitly
+        # adjudicated may not be signed directly (design §7.3-5).
+        if row.get("needs_llm") and not row.get("needs_llm_resolved"):
+            raise ValueError(
+                f"NEEDS_LLM_UNRESOLVED: {candidate_id} needs explicit adjudication before signed"
+            )
+        if not reviewer:
+            raise ValueError("SIGNATURE_REQUIRES_REVIEWER: signed needs --by")
+    # Explicit adjudication loop closed only when a needs_llm item is reviewed
+    # back to reviewed; a plain pending->reviewed does not resolve it.
+    resolved = bool(row.get("needs_llm_resolved"))
+    if old == "needs_llm" and status == "reviewed":
+        resolved = True
     row.update({
         "status": status,
         "reviewer": reviewer,
         "note": note,
+        "needs_llm": bool(row.get("needs_llm", False)),
+        "needs_llm_resolved": resolved,
         "reviewed_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "signed_at": datetime.datetime.now().isoformat(timespec="seconds") if status == "signed" else row.get("signed_at"),
     })
@@ -486,23 +626,40 @@ def update_review(path: pathlib.Path, candidate_id: str, status: Status,
 
 
 def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
-                 ledger: dict[str, dict], confirm: bool) -> dict:
-    """Only signed candidates, only with explicit --confirm. AGENTS.md stays read-only."""
+                 ledger: dict[str, dict], confirm: bool,
+                 ledger_path: pathlib.Path | None = None) -> dict:
+    """Only signed candidates, only with explicit --confirm. AGENTS.md stays read-only.
+
+    F1/F2: ledger target_profile is an editable input — whitelist + containment
+    validated via safe_profile_target; traversal / non-whitelisted / escaped
+    targets are rejected, not written.
+    F7: successfully written rows are persisted back to the ledger as archived
+    (with archived_at), so the audit chain records what was actually patched.
+    """
     if not confirm:
-        return {"applied": 0, "reason": "NEEDS_CONFIRM"}
+        return {"applied": 0, "rejected": 0, "reason": "NEEDS_CONFIRM"}
     applied = 0
+    rejected = 0
+    base = profiles_dir.resolve()
     for cid, row in ledger.items():
         if row.get("status") != "signed":
             continue
         target = row.get("target_profile", "")
-        if not target or (AGENTS_READ_ONLY and target == "AGENTS.md"):
+        try:
+            actual = safe_profile_target(target, profiles_dir)
+        except ValueError:
+            rejected += 1
             continue
-        actual = profiles_dir / target
+        if AGENTS_READ_ONLY and actual.name == "AGENTS.md":
+            continue
         if not actual.is_file():
             alt = profiles_dir / "04-正反例避坑账.md"
-            if target.startswith("04-") and alt.is_file():
-                actual = alt
-        patch = patches_dir / f"{target}.patch.md"
+            if actual.name.startswith("04-") and alt.is_file():
+                actual = alt.resolve()
+                if actual.parent != base:
+                    rejected += 1
+                    continue
+        patch = patches_dir / f"{actual.name}.patch.md"
         if not patch.is_file() or not actual.is_file():
             continue
         body = patch.read_text(encoding="utf-8", errors="replace")
@@ -513,8 +670,15 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
             continue  # already has a pending zone; human merges manually
         actual.write_text(text.rstrip() + "\n\n" + body, encoding="utf-8")
         row["status"] = "archived"
+        row["archived_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         applied += 1
-    return {"applied": applied, "reason": "ok"}
+    if ledger_path is not None and applied:
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text(
+            "\n".join(json.dumps(v, ensure_ascii=False) for v in ledger.values()) + "\n",
+            encoding="utf-8",
+        )
+    return {"applied": applied, "rejected": rejected, "reason": "ok"}
 
 
 def run_deep_backfill(profiles_dir: pathlib.Path, first_pass_md: pathlib.Path,
@@ -523,11 +687,11 @@ def run_deep_backfill(profiles_dir: pathlib.Path, first_pass_md: pathlib.Path,
     coverage = build_coverage_index(profiles)
     fp = parse_first_pass(first_pass_md)   # will raise if missing — mandatory input
     records = load_records(db_path)
-    candidates, dropped = coverage_decide(records, coverage, fp)
+    candidates, dropped, cross_refs = coverage_decide(records, coverage, fp)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "l2_candidates.md"
-    report_path.write_text(render_candidates(candidates, dropped), encoding="utf-8")
+    report_path.write_text(render_candidates(candidates, dropped, cross_refs), encoding="utf-8")
 
     patches_dir = out_dir / "l2_profile_patches"
     patches_dir.mkdir(parents=True, exist_ok=True)
@@ -535,15 +699,35 @@ def run_deep_backfill(profiles_dir: pathlib.Path, first_pass_md: pathlib.Path,
         (patches_dir / f"{name}.patch.md").write_text(body, encoding="utf-8")
 
     ledger_path = out_dir / "l2_review.jsonl"
-    if not ledger_path.exists():
-        ledger_path.write_text("", encoding="utf-8")
+    # Seed one ledger row per formal candidate, carrying needs_llm so the sign
+    # state machine has the data link it needs (F4). Existing human-reviewed
+    # rows are preserved (setdefault).
+    existing = load_review_ledger(ledger_path)
+    for c in candidates:
+        existing.setdefault(c.candidate_id, {
+            "candidate_id": c.candidate_id,
+            "rec_id": c.rec_id,
+            "layer": 2,
+            "signal": c.signal,
+            "target_profile": c.target_profile,
+            "status": c.status,
+            "needs_llm": c.needs_llm,
+            "needs_llm_resolved": False,
+            "reviewer": "",
+            "note": "",
+        })
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        "\n".join(json.dumps(v, ensure_ascii=False) for v in existing.values()) + "\n",
+        encoding="utf-8",
+    )
 
     return {
         "records": len(records),
         "personal_records": sum(1 for r in records if r["role"] == "user"),
         "candidates": len(candidates),
         "dropped": len(dropped),
-        "cross_ref_L1": sum(1 for c in candidates if c.cross_ref == "L1"),
+        "cross_ref_L1": len(cross_refs),
         "report": str(report_path),
         "patches_dir": str(patches_dir),
         "ledger": str(ledger_path),
@@ -578,9 +762,12 @@ def main() -> int:
         print(f"REVIEW_OK {row['candidate_id']} -> {row['status']}")
         return 0
     if args.apply_signed:
+        if not args.profiles:
+            ap.error("--apply-signed requires --profiles (directory of the 6 hot-load profiles)")
         res = apply_signed(args.out / "l2_profile_patches", args.profiles,
-                           load_review_ledger(ledger_path), args.confirm)
-        print(f"APPLY_SIGNED applied={res['applied']} reason={res['reason']}")
+                           load_review_ledger(ledger_path), args.confirm,
+                           ledger_path=ledger_path)
+        print(f"APPLY_SIGNED applied={res['applied']} rejected={res['rejected']} reason={res['reason']}")
         return 0
     if not (args.profiles and args.first_pass and args.db):
         ap.error("--profiles, --first-pass and --db are all required for candidate generation")
