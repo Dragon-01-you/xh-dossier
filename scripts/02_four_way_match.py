@@ -343,7 +343,15 @@ def main() -> int:
     parser.add_argument("--use-fastembed", action="store_true", help="Use fastembed BAAI/bge-small-zh-v1.5 if installed")
     args = parser.parse_args()
 
-    report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    try:
+        report = run_four_way_pipeline(args.db, args.keywords, use_fastembed=args.use_fastembed)
+    except FileNotFoundError:
+        # The function layer intentionally still raises FileNotFoundError (that
+        # contract is asserted by test_missing_db_raises_without_creating_empty_file).
+        # Only the CLI translates it into a human-readable failure with exit 2.
+        print(f"DB_NOT_FOUND: 找不到数据库文件 {args.db}。")
+        print("请先运行 scripts/01_clean_and_index.py 生成统一索引库，并确认 raw/ 里确实有导出的对话文件，不要把堆栈当成失败原因。")
+        return 2
     if report["records"] == 0:
         print("FOUR_WAY_EMPTY: 数据库里没有可匹配的原文记录（records=0）。")
         print("请先运行 scripts/01_clean_and_index.py 并确认 raw/ 里确实有导出的对话文件，不要把空报告当成跑通。")
