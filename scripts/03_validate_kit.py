@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import argparse
+import calendar
+import datetime
 import pathlib
 import re
 
@@ -23,6 +25,56 @@ AI_CLICHES = [
     "打造全链路闭环生态",
     "每天进步1%复利37倍",
 ]
+
+# Issue #2 / review E4: only a *quoted example adjacent to a rule verb* is exempt.
+# A line merely containing 禁止 somewhere used to exempt every cliché on it.
+_QUOTE_PAIRS = [
+    ("'", "'"), ('"', '"'), ("`", "`"), ("“", "”"),
+    ("‘", "’"), ("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"),
+]
+_RULE_VERBS = ("禁止", "严禁", "不要说", "禁用水话", "别说", "禁止说", "禁止用", "严禁说", "不使用")
+_RULE_CONNECTORS = ("", "说", "用", "：", ":", " ")
+
+_DATE_RE = re.compile(r"(?<!\d)(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?!\d)")
+_CJK_DATE_RE = re.compile(r"(20\d{2})年(\d{1,2})月(\d{1,2})日")
+
+
+def _is_quoted_rule_example(line: str, cliche: str) -> bool:
+    """Return True only for 禁止说“...” style intentional citations.
+
+    A rule may list several quoted phrases in a row ("禁止说“A”“B”…"), so the
+    rule verb must appear before the cliché and the span between them must not
+    cross a sentence terminator. This still rejects
+    “A”这是禁止的腔调, where the rule verb appears after the citation.
+    """
+    for open_q, close_q in _QUOTE_PAIRS:
+        quoted = f"{open_q}{cliche}{close_q}"
+        if quoted not in line:
+            continue
+        cliche_at = line.find(quoted)
+        for verb in _RULE_VERBS:
+            for conn in _RULE_CONNECTORS:
+                marker = f"{verb}{conn}{open_q}"
+                rule_at = line.find(marker)
+                if rule_at == -1 or rule_at >= cliche_at:
+                    continue
+                if not re.search(r"[。！？；\n]", line[rule_at:cliche_at]):
+                    return True
+    return False
+
+
+def _invalid_calendar_dates(text: str) -> list[str]:
+    """Return impossible dates such as 2025-02-30; ignore month-only/version-like strings."""
+    bad: list[str] = []
+    for regex in (_DATE_RE, _CJK_DATE_RE):
+        for m in regex.finditer(text):
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if not (2000 <= y <= 2100 and 1 <= mo <= 12):
+                bad.append(m.group(0))
+                continue
+            if not (1 <= d <= calendar.monthrange(y, mo)[1]):
+                bad.append(m.group(0))
+    return bad
 
 # Match unfilled template instruction placeholders, both Chinese (<填写...>) and
 # ASCII (<YYYY-MM>, <your_name>, <TODO>). Exclude real autolinks such as
@@ -117,12 +169,15 @@ def validate_kit(
             passed = False
 
         for line in text.splitlines():
-            if any(p in line for p in ("禁止", "严禁", "不要说", "AI 腔调")):
-                continue
             for cliche in AI_CLICHES:
-                if cliche in line:
+                if cliche in line and not _is_quoted_rule_example(line, cliche):
                     diagnostics.append(f"CLICHE found in {fname}: '{cliche}'")
                     passed = False
+
+        invalid_dates = _invalid_calendar_dates(text)
+        if invalid_dates:
+            diagnostics.append(f"INVALID_DATE found in {fname}: {invalid_dates[:3]}")
+            passed = False
 
         leaked_paths = SENSITIVE_PATH_RE.findall(text)
         if leaked_paths:
