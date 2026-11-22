@@ -11,8 +11,10 @@ negation guardrail, one/two-hop provenance, graph valid-time filter, and keyword
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 import sqlite3
+import subprocess
 import sys
 from importlib import import_module
 
@@ -487,3 +489,35 @@ def test_run_recall_without_filters_returns_no_temporal_or_graph_rows(tmp_path: 
     assert report["counts"]["temporal"] == 0
     assert report["counts"]["graph"] == 0
     assert report["counts"]["keyword"] >= 1
+
+
+def test_graph_edge_count_is_deterministic_across_hash_seeds(tmp_path: pathlib.Path) -> None:
+    # Regression: set iteration used to leak Python hash randomization into edge
+    # counts (2057/2060/2064 for the same DB). Sorting entity names fixes it.
+    db = _make_db(
+        tmp_path,
+        [
+            ("R1", "2026-09-01", "user", "我学习 Python 和 FastAPI，使用 Obsidian 记笔记，并在项目里写作、开发、测试知识库。"),
+            ("R2", "2026-09-02", "user", "我继续学习 Python，用 FastAPI 做接口，把笔记放进 Obsidian 知识库。"),
+        ],
+    )
+    script = SCRIPTS_DIR / "06_graph_index.py"
+    counts: list[int] = []
+    for seed in ("0", "1", "42"):
+        env = dict(os.environ)
+        env["PYTHONHASHSEED"] = seed
+        proc = subprocess.run(
+            [
+                sys.executable, "-X", "utf8", str(script),
+                "--db", str(db), "--action", "build", "--rebuild",
+                "--lexicon", "Python", "FastAPI", "Obsidian", "知识库", "写作", "开发", "测试",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+        con = sqlite3.connect(str(db))
+        counts.append(con.execute("SELECT COUNT(*) FROM relations").fetchone()[0])
+        con.close()
+    assert len(set(counts)) == 1, counts
