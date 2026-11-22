@@ -280,3 +280,21 @@ def test_cli_empty_database_does_not_write_fake_backfill_report(
     assert code == 2
     assert "FOUR_WAY_EMPTY" in out
     assert not out_path.exists()
+
+
+def test_wizard_cli_returns_nonzero_when_consent_is_declined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mod_wizard, "run_wizard", lambda **_: {"consented": False})
+    monkeypatch.setattr(sys, "argv", ["00_export_wizard.py", "--browser", "edge", "--yes"])
+
+    assert mod_wizard.main() == 1
+
+
+def test_wizard_cli_returns_zero_after_consent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mod_wizard, "run_wizard", lambda **_: {"consented": True})
+    monkeypatch.setattr(sys, "argv", ["00_export_wizard.py", "--browser", "edge", "--yes"])
+
+    assert mod_wizard.main() == 0
