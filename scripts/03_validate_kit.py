@@ -124,6 +124,10 @@ SENSITIVE_PATH_RE = re.compile(
     r"|github_pat_[A-Za-z0-9_]{22,}"
     # AWS access key id
     r"|AKIA[0-9A-Z]{16}"
+    # Tencent Cloud / generic cloud keys (bootstrap already masks these; the
+    # validator is the second line of defence against hand-written files).
+    r"|AKID[A-Za-z0-9]{10,}"
+    r"|(?:SecretId|SecretKey|AccessKeyId|AccessKeySecret)\s*[:：=]\s*[A-Za-z0-9/+=]{8,}"
     # PRC mobile number: 1[3-9] + 9 digits, bounded so long digit runs do not match.
     r"|(?<!\d)1[3-9]\d{9}(?!\d)"
     # PRC resident ID: 6-digit area + 8-digit birthdate + 3 digits + checksum (digit or X).
