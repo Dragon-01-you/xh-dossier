@@ -32,7 +32,7 @@ REQUIRED_KIT_FILES = [
 # Real user kits often name the fourth file 04-反面案例清单.md. Accept that
 # spelling without weakening the six-file contract or the output filenames.
 KIT_FILE_ALIASES = {
-    "04-正反例避坑账.md": ["04-正反例避坑账.md", "04-反面案例清单.md"],
+    "04-正反例避坑账.md": ["04-反面案例清单.md", "04-正反例避坑账.md"],
 }
 
 
