@@ -50,9 +50,15 @@ def test_no_fixed_download_path_claimed():
     assert "D:\\eage下载" not in doc
 
 
-def test_no_unverified_workbuddy_menu_path():
-    # Review B1: the WorkBuddy menu path had no first-hand evidence.
-    assert "WorkBuddy" not in doc
+def test_workbuddy_coexistence_note_is_user_tested_not_official():
+    """#62 closed as user-verified: a WorkBuddy coexistence note may appear only
+    when marked as a 2026-11-23 user test record. It must read neither as an
+    official compatibility declaration nor as an official install step."""
+    for line in doc.splitlines():
+        if "WorkBuddy" in line:
+            assert "用户实测" in line and "2026-11-23" in line, line
+            assert "非官方兼容声明" in line, line
+            assert "安装步骤" in line and "不写入" in line, line
 
 
 def test_readme_points_to_afterchat():
@@ -67,7 +73,7 @@ def test_workbuddy_unverified_path_gated():
     `UNVERIFIED` marker on the same line; otherwise it must not be written back as a
     confirmed step.
     """
-    unverified_tokens = ["WorkBuddy", "电脑操控", "浏览器操控"]
+    unverified_tokens = ["电脑操控", "浏览器操控"]
     for line in doc.splitlines():
         if any(tok in line for tok in unverified_tokens):
             assert "UNVERIFIED" in line, (
