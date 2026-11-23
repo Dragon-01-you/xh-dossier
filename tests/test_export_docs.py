@@ -73,3 +73,17 @@ def test_workbuddy_unverified_path_gated():
             assert "UNVERIFIED" in line, (
                 f"未标注 UNVERIFIED 的 WorkBuddy 菜单指引被写回文档: {line.strip()}"
             )
+
+
+def test_doc_warns_against_inapp_browser():
+    # Issue #9 CP2: the guide must explicitly tell users not to use the desktop
+    # client's built-in / in-app browser (IAB), which usually does not reuse the
+    # local browser's login state.
+    assert "内置浏览器" in doc or "自带浏览器" in doc or "IAB" in doc
+
+
+def test_doc_has_switch_verification_step():
+    # Issue #9 CP3: beyond the switch instructions, the guide needs a concrete
+    # "how to confirm the switches are actually on" self-check step.
+    assert "怎么确认" in doc
+    assert "ScriptCat 管理器" in doc and "启用" in doc
