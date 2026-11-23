@@ -2,6 +2,16 @@
 
 本文件只记录**真实合并、真实跑通**的变更。未验证的计划不写进来。
 
+## 0.2.0-rc.5 — 2026-11-23
+
+### 修复：Linux 老 unzip 中文文件名乱码被误报为缺模板（issue #55）
+- **根因**：发布 zip 的中文条目已带 EFS UTF-8 标志（0x800），但 Info-ZIP UnZip 6.00 (2009) 忽略该标志、按本地代码页解释文件名；重新打包、再打一次标志修不好，问题在解压端。
+- 新增 `scripts/archive_io.py`：stdlib `zipfile`/`tarfile` 解压主路径；乱码文件名识别（代理字节 / U+FFFD / cp437-cp866-GBK 可还原乱码特征）与“真缺文件 vs 名字乱码”分类；代理字节在输出与 JSON receipt 前清洗为 U+FFFD。
+- `00_doctor.py` 与 `xh.py doctor`：乱码树报“文件名编码损坏”并给可复制的重解压命令，不再笼统报“缺模板”。
+- 新增 `install.sh`（Linux/macOS）：zip 主路径 `python3 -m zipfile -e`，退路 bsdtar → unzip（带乱码警告）；tar.gz 走 `tar -xzf`。`install.ps1` 新增 `-Archive`：Expand-Archive 主路径，Python zipfile 退路。
+- 测试：`tests/test_zip_mojibake.py` 覆盖两类判定、识别器单测、zip/tar.gz 标准库往返、receipt 清洗；Windows Python 3.12 与 Debian 13 容器（UnZip 6.00）各 206 passed。
+- 边界：`unzip -O UTF-8` 仅 Debian/Ubuntu 补丁、部分发行版无此选项；macOS 未实测。
+
 ## 0.2.0-rc.4 — 2026-11-23
 
 ### 收紧机器初稿噪声（真实 729 复跑）

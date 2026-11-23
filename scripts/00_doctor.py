@@ -14,6 +14,8 @@ import pathlib
 import sqlite3
 import sys
 
+from archive_io import diagnose_missing, encoding_error_message
+
 MIN_PYTHON = (3, 11)
 PROBE_TEXT = "你好世界hello"
 
@@ -99,13 +101,12 @@ def check_workdir(root: pathlib.Path) -> None:
 
 
 def check_files(root: pathlib.Path) -> None:
-    missing = [
-        rel for rel in REQUIRED_SCRIPTS + REQUIRED_TEMPLATES
-        if not (root / rel).is_file()
-    ]
-    if missing:
-        preview = "、".join(missing[:5])
-        if len(missing) > 5:
+    diag = diagnose_missing(root, REQUIRED_SCRIPTS + REQUIRED_TEMPLATES)
+    if diag.missing:
+        if diag.garbled:
+            raise DoctorError(encoding_error_message(diag))
+        preview = "、".join(diag.missing[:5])
+        if len(diag.missing) > 5:
             preview += "…"
         raise DoctorError(
             f"缺少必需文件：{preview}。请确认仓库完整，或重新获取发布包。"

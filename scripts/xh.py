@@ -19,6 +19,8 @@ import sys
 import zipfile
 from datetime import datetime, timezone, timedelta
 
+from archive_io import diagnose_missing, encoding_error_message
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORK = ROOT / "work"
 TEMPLATES = ROOT / "templates"
@@ -105,11 +107,17 @@ def doctor(args: argparse.Namespace) -> int:
         if not optional[name]:
             warnings.append(f"optional scripts/{name} missing")
 
+    template_rels = [f"templates/{name}" for name in KIT_FILES]
+    diag = diagnose_missing(ROOT, template_rels)
     templates: dict[str, bool] = {}
-    for name in KIT_FILES:
-        templates[name] = _kit_actual_name(TEMPLATES, name) is not None
-        if not templates[name]:
-            errors.append(f"missing template {name}")
+    for rel in template_rels:
+        name = pathlib.PurePosixPath(rel).name
+        templates[name] = _kit_actual_name(TEMPLATES, name) is not None or rel in diag.garbled
+    for rel in diag.missing:
+        if rel not in diag.garbled:
+            errors.append(f"missing template {pathlib.PurePosixPath(rel).name}")
+    if diag.garbled:
+        errors.append("ENCODING_CORRUPT: " + encoding_error_message(diag).replace("\n", " | "))
 
     sample_count = 0
     if SAMPLE_RAW.is_dir():
