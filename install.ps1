@@ -16,14 +16,14 @@ $Target = (Resolve-Path -LiteralPath $Target).Path
 Write-Output "source: $src"
 Write-Output "target: $Target"
 
-# Python detection: prefer py -3.12, then py -3, then python.
+# Python detection: prefer py -3 (launcher picks the newest 3.x), then plain python.
 $pyExe = $null
 $pyArgs = @()
-foreach ($candidate in @(@('py', '-3.12'), @('py', '-3'), @('python', ''))) {
+foreach ($candidate in @(@('py', '-3'), @('python', ''))) {
     $exe = $candidate[0]
     $args = @($candidate[1..($candidate.Count - 1)] | Where-Object { $_ })
     try {
-        & $exe @args -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 3)" 2>&1 | Out-Null
+        & $exe @args -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 3)" 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $pyExe = $exe
             $pyArgs = $args
@@ -67,7 +67,11 @@ if ($Archive) {
 }
 
 if (-not $pyExe) {
-    Write-Output "INSTALL_FAIL: Python 3.10+ not found. Install Python, then rerun this script."
+    Write-Output "INSTALL_FAIL: 未找到 Python 3.11+（当前机器没有可用的 Python 解释器）。"
+    Write-Output "安装路径（任选其一，装完重跑本脚本）："
+    Write-Output "  1) winget（Windows 自带包管理器）：winget install Python.Python.3.12"
+    Write-Output "  2) 官网下载页：https://www.python.org/downloads/  选 Python 3.11 或更新版本，安装时勾选 Add python.exe to PATH。"
+    Write-Output "  3) 共享机器 / per-user 安装被 launcher 拦截：见 README「per-user 安装退路」，安装参数 Include_launcher=0，装好后用 python 调用。"
     exit 1
 }
 $version = (& $pyExe @pyArgs -c "import sys; print(sys.version.split()[0])" 2>&1 | Out-String).Trim()

@@ -49,6 +49,18 @@
 
 **不要用桌面 AI 客户端自带的内置浏览器（IAB / 内嵌浏览器）做导出**：这类内置浏览器通常不复用你本机 Edge / Chrome 的登录态，进去往往是未登录状态，会看到“请去另一台电脑继续”之类提示，导不出真实会话。导出必须在你平时已经登录聊天平台的那个扩展浏览器里完成；如果已经在客户端内置浏览器里卡住，退回本机日常浏览器按上面 1~4 步重做。
 
+### 0.5 网络场景退路（商店 / scriptcat.org / GreasyFork 打不开时）
+
+主路径与备选入口按目标分开列，任一入口超时不要卡在原地：
+
+| 目标 | 主路径 | 打不开 / 超时时的退路 |
+| --- | --- | --- |
+| 引擎 ScriptCat（脚本猫） | 浏览器商店（Edge 加载项 / Chrome 网上应用店）、scriptcat.org | GitHub 开源发布页 https://github.com/scriptscat/scriptcat/releases 直接下载压缩包；或向导 `python -X utf8 scripts/00_export_wizard.py --browser edge --download-release` 打印发布页链接并拉取压缩包 |
+| 工人 AfterChat #589622 | GreasyFork 页面 https://greasyfork.org/zh-CN/scripts/589622-afterchat-llm-chat-exporter | 先换网络环境 / 代理再开同一链接；GreasyFork 长期不可达时，从该脚本作者主页或其公开源码仓库找同名发布（本轮未在本机实测镜像入口，找不到不要随便装来历不明的同名脚本） |
+| 其他单平台脚本 | ScriptCat 脚本中心 | 同上：先刷新 / 换网络；再去对应脚本的 GitHub 发布页核对安装入口 |
+
+> 边界：本机快照（2026-11-23）观察到商店与 GreasyFork 直连超时、GitHub release 资产可达；不同网络环境可达性会变，以你自己点击打开的结果为准。向导在未获本人确认前不会自动打开任何链接。
+
 ---
 
 ## 一、推荐导出扩展（ScriptCat 脚本猫）与浏览器开关必做设置

@@ -94,25 +94,34 @@ def _kit_actual_name(folder: pathlib.Path, canonical: str) -> pathlib.Path | Non
 
 
 def doctor(args: argparse.Namespace) -> int:
+    root = (
+        pathlib.Path(getattr(args, "root", None)).expanduser()
+        if getattr(args, "root", None)
+        else ROOT
+    )
+    scripts_dir = root / "scripts"
+    template_dir = root / "templates"
+    sample_dir = root / "examples" / "sample_raw"
+    work_dir = root / "work"
     errors: list[str] = []
     warnings: list[str] = []
     scripts: dict[str, bool] = {}
     for name in REQUIRED_SCRIPTS:
-        scripts[name] = _script(name).is_file()
+        scripts[name] = (scripts_dir / name).is_file()
         if not scripts[name]:
             errors.append(f"missing scripts/{name}")
     optional: dict[str, bool] = {}
     for name in OPTIONAL_SCRIPTS:
-        optional[name] = _script(name).is_file()
+        optional[name] = (scripts_dir / name).is_file()
         if not optional[name]:
             warnings.append(f"optional scripts/{name} missing")
 
     template_rels = [f"templates/{name}" for name in KIT_FILES]
-    diag = diagnose_missing(ROOT, template_rels)
+    diag = diagnose_missing(root, template_rels)
     templates: dict[str, bool] = {}
     for rel in template_rels:
         name = pathlib.PurePosixPath(rel).name
-        templates[name] = _kit_actual_name(TEMPLATES, name) is not None or rel in diag.garbled
+        templates[name] = _kit_actual_name(template_dir, name) is not None or rel in diag.garbled
     for rel in diag.missing:
         if rel not in diag.garbled:
             errors.append(f"missing template {pathlib.PurePosixPath(rel).name}")
@@ -120,24 +129,24 @@ def doctor(args: argparse.Namespace) -> int:
         errors.append("ENCODING_CORRUPT: " + encoding_error_message(diag).replace("\n", " | "))
 
     sample_count = 0
-    if SAMPLE_RAW.is_dir():
-        sample_count = len([p for p in SAMPLE_RAW.iterdir() if p.is_file()])
+    if sample_dir.is_dir():
+        sample_count = len([p for p in sample_dir.iterdir() if p.is_file()])
     if sample_count == 0:
         errors.append("examples/sample_raw is missing or empty")
 
     work_writable = False
     try:
-        WORK.mkdir(parents=True, exist_ok=True)
-        probe = WORK / ".xh-write-probe"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        probe = work_dir / ".xh-write-probe"
         probe.write_text("ok", encoding="utf-8")
         work_writable = probe.is_file()
         probe.unlink(missing_ok=True)
     except OSError:
         errors.append("work/ is not writable")
 
-    py_ok = sys.version_info >= (3, 10)
+    py_ok = sys.version_info >= (3, 11)
     if not py_ok:
-        errors.append(f"Python >=3.10 required, got {sys.version.split()[0]}")
+        errors.append(f"Python >=3.11 required, got {sys.version.split()[0]}")
 
     browsers = {
         "edge": pathlib.Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe").is_file()
@@ -160,6 +169,7 @@ def doctor(args: argparse.Namespace) -> int:
         errors=errors,
         warnings=warnings,
     )
+    payload["root"] = str(root)
     path = _write_receipt("doctor", payload)
     print("DOCTOR_OK" if not errors else "DOCTOR_FAIL")
     print("receipt:", path)
@@ -392,6 +402,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("doctor", help="check Python/scripts/templates/work")
+    p.add_argument("--root", default=None, help="仓库根目录（默认脚本所在仓库根目录，与 00_doctor.py --root 口径一致）")
     p.set_defaults(func=doctor)
 
     p = sub.add_parser("init", help="create work dirs and copy the 6 templates")

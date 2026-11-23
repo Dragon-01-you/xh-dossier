@@ -1,6 +1,8 @@
 # AGENT_START_HERE · 给任何零环境 Agent 的入口
 
-你只需要 Python 3.10+。核心路径没有第三方依赖；`pytest` 只在开发时用。
+你只需要 Python 3.11+。核心路径没有第三方依赖；`pytest` 只在开发时用。
+
+> **目录要求**：下面所有命令先 `cd` 到仓库根目录再运行；在别的目录用相对路径调脚本会报 `can't open file ... [Errno 2] No such file or directory`，先检查当前目录是不是仓库根。机器上没有 Python 时的安装入口、共享机器 per-user（被 launcher 拦截）退路，见 README「3.0 普通用户零终端安装与预检」。
 
 ## 0. 先体检（10 秒）
 
