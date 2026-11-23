@@ -38,6 +38,7 @@ OPTIONAL_SCRIPTS = [
     "05_temporal_index.py",
     "06_graph_index.py",
     "07_recall_time_graph.py",
+    "09_export_coverage.py",
 ]
 KIT_FILES = [
     "AGENTS.md",
@@ -376,6 +377,16 @@ def package(args: argparse.Namespace) -> int:
     return 0
 
 
+def coverage(args: argparse.Namespace) -> int:
+    cmd = [
+        sys.executable, "-X", "utf8", str(_script("09_export_coverage.py")),
+        "--raw", str(args.raw), "--expected", str(args.expected),
+    ]
+    if args.manifest:
+        cmd += ["--list", str(args.manifest)]
+    return _run(cmd)
+
+
 def status(args: argparse.Namespace) -> int:
     print("root:", ROOT)
     print("python:", sys.version.split()[0])
@@ -471,6 +482,12 @@ def main() -> int:
     p = sub.add_parser("package", help="build a release zip without .git/work")
     p.add_argument("--out", default=str(ROOT / "dist" / "xh-dossier.zip"))
     p.set_defaults(func=package)
+
+    p = sub.add_parser("coverage", help="reconcile raw export count against session list count (#93)")
+    p.add_argument("--raw", default=str(WORK / "raw"))
+    p.add_argument("--expected", type=int, required=True)
+    p.add_argument("--list", dest="manifest", default=None, help="optional session title manifest")
+    p.set_defaults(func=coverage)
 
     p = sub.add_parser("status", help="show work dirs and scripts")
     p.set_defaults(func=status)
