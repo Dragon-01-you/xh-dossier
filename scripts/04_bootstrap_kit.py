@@ -108,6 +108,11 @@ NOISE_MARKERS = (
     "角色与核心使命", "你的项目身份", "你的专长", "你的产出",
     "MASTER BRIEF", "PROJECT MASTER", "你是由", "环境说明",
     "检测到您的", "本报告", "报告日期", "听播客:",
+    # Issue #94: pasted third-party person intros / bios / podcast scripts are
+    # not the user's own durable view; keep them out of the A-level candidates.
+    "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
+    "书中说", "节选自", "摘自", "引用自", "主播", "嘉宾", "访谈实录",
+    "转写稿", "作为过去", "五十年",
 )
 ABUSIVE_MARKERS = (
     "有病", "狗屁", "鸡毛", "傻", "滚", "妈的", "操你", "废物", "垃圾",
@@ -136,9 +141,20 @@ REQUEST_START_RE = re.compile(
 TASK_CONTENT_RE = re.compile(
     r"(请你|帮我|帮我看看|你可以|你看|你先|你去|你给我|给我|按上面|按照|深度分析|"
     r"深度搜索|深度看|去GitHub|去B站|去网上|搜一下|检索一下|生成一份|整理并生成|"
-    r"导出给我|告诉我|说明一下|看一下|看一看|研究一下)"
+    r"导出给我|告诉我|说明一下|看一下|看一看|研究一下|"
+    r"我就想|我想用|渲染出来|建模应用程序)"
 )
 EXPERIENCE_RE = re.compile(r"(我|我们|之前|上次|后来|结果|当时|这次|踩坑|跑通|返工)")
+# Issue #94: a question to the AI is not an identity / principle / rule candidate.
+QUESTION_RE = re.compile(
+    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|怎么回事|为何|能否|"
+    r"还是说|你可以看一下|请问|哪些|什么区别|什么意思|[？?])"
+)
+# Third-party attribution phrases: pasted biography / quoted philosophy / essay.
+THIRD_PARTY_MARKERS = (
+    "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
+    "书中说", "节选自", "摘自", "引用自", "作为过去", "五十年",
+)
 
 
 def strip_request_tail(text: str) -> str:
@@ -259,6 +275,9 @@ def is_noise(text: str) -> bool:
     # A pure question or a one-word command is not a durable view.
     if len(text) < 35 and text.endswith(("?", "？")):
         return True
+    # Issue #94: questions directed at the AI never become durable candidates.
+    if QUESTION_RE.search(text):
+        return True
     # Task instructions aimed at the AI ("你帮我 / 请你 / 我需要你") are not
     # self-description unless the same message also states a first-person fact.
     if any(p in compact for p in ("你帮我", "请你", "我需要你", "你给我", "你要")) and not SELF_RE.search(text):
@@ -304,6 +323,11 @@ def candidate_sentence(text: str, kind: str) -> str:
             continue
         if REQUEST_START_RE.search(part):
             continue
+        # Issue #94: questions and pasted third-party material never enter any A-level candidate.
+        if QUESTION_RE.search(part):
+            continue
+        if any(mark in part for mark in THIRD_PARTY_MARKERS):
+            continue
         if TASK_CONTENT_RE.search(part) and not SELF_RE.search(part):
             continue
         if kind in ("identity", "mainline") and part.startswith(("然后", "所以", "但是", "那", "这个", "那个", "还有", "另外")):
@@ -334,6 +358,12 @@ def candidate_sentence(text: str, kind: str) -> str:
             s = score(part, PRINCIPLE_CUES)
         elif kind == "rule":
             if "你可以" in part:
+                continue
+            # Issue #94: a task-content sentence ("我就想用…把冰屋渲染出来") is not a hard rule,
+            # even when it contains a first-person pronoun.
+            if TASK_CONTENT_RE.search(part):
+                continue
+            if VALIDATOR.DIALOGUE_ADDRESSED_RE.search(part):
                 continue
             if not re.search(r"(必须|禁止|不要|不能|不许|记住|铁律|红线|规则|底线|绝不)", part):
                 continue

@@ -78,7 +78,17 @@ NON_PERSONAL_MATERIAL_TOKENS = (
     "感谢收听", "收听", "本期", "转写", "字幕", "访谈",
     "skill://", "plugin://", "[操作电脑]", "[seedaudio", "[github]",
     "内容类型", "时长", "https://", "http://",
+    # Issue #94: pasted third-party person bios / quoted philosophy.
+    "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
+    "书中说", "节选自", "摘自", "引用自", "主播", "嘉宾", "访谈实录",
+    "转写稿", "作为过去", "五十年",
 )
+# Issue #94: a question to the AI is not a durable personal-experience record.
+QUESTION_RE = re.compile(
+    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|怎么回事|为何|能否|"
+    r"还是说|你可以看一下|请问|哪些|什么区别|什么意思|[？?])"
+)
+
 NEGATION = ("先不要", "不要", "先别", "别直接", "禁止", "绝不", "别帮我")
 SUBJECT_USER_MISS = ("我没听懂", "我没看懂", "没明白你说的")
 SUBJECT_AI_MISS = ("你还是没理解", "你没理解", "没听懂你讲", "完全没理解我")
@@ -318,6 +328,9 @@ def classify_narrative(content: str) -> tuple[bool, str]:
         return False, "non_personal:prompt_prefix"
     if any(tok in n for tok in NON_PERSONAL_MATERIAL_TOKENS):
         return False, "non_personal:ai_or_material"
+    if QUESTION_RE.search(c):
+        return False, "non_personal:question"
+
     if not any(m in c for m in EXPERIENCE_MARKERS):
         return False, "non_personal:no_first_person"
     if len(c) < 15:
