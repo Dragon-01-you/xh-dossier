@@ -40,7 +40,7 @@ from typing import Literal
 
 PROFILE_FILES = (
     "AGENTS.md", "00-总入口索引.md", "01-身份与当前主线.md",
-    "02-核心判断准则.md", "03-硬规则与表达黑话.md", "04-反面案例清单.md",
+    "02-核心判断准则.md", "03-硬规则与表达黑话.md", "04-正反例避坑账.md",
 )
 
 STOPWORDS = {
@@ -115,8 +115,8 @@ def _source_title(source_file: str) -> str:
 
 # Signal type -> (target profile, section anchor)
 PROFILE_SECTION_MAP = {
-    "recurring_mistake": ("04-反面案例清单.md", "## 二、反例标本"),
-    "positive_pattern": ("04-反面案例清单.md", "## 一、正例标本"),
+    "recurring_mistake": ("04-正反例避坑账.md", "## 二、反例标本"),
+    "positive_pattern": ("04-正反例避坑账.md", "## 一、正例标本"),
     "complaint": ("02-核心判断准则.md", "## 三、术"),
     "core_fact": ("01-身份与当前主线.md", "## 一、不可篡改的核心事实"),
     "hard_rule": ("03-硬规则与表达黑话.md", "## 一、对任何接手 AI 的 11 条硬规则"),
@@ -177,8 +177,8 @@ def load_profiles(profile_dir: pathlib.Path) -> dict[str, str]:
         if p.parent != base:
             raise ValueError(f"PROFILE_TARGET_ESCAPE: {name!r} leaves profiles dir")
         if not p.is_file():
-            # The 6th file has a known naming variant; accept both.
-            alt = profile_dir / "04-正反例避坑账.md"
+            # The 6th file has a known legacy alias; accept both.
+            alt = profile_dir / "04-反面案例清单.md"
             if name.startswith("04-") and alt.is_file():
                 p = alt.resolve()
                 if p.parent != base:
@@ -194,10 +194,10 @@ def load_profiles(profile_dir: pathlib.Path) -> dict[str, str]:
 # resolved path must stay inside profiles_dir (rejects `..`, absolute paths,
 # `./name`, `sub/../name`, symlink escape).
 PROFILE_WHITELIST = frozenset(PROFILE_FILES)
-# Template name -> canonical hot-load name. The 6th profile ships under two
-# names in the wild (real base `04-反面案例清单.md` vs template
-# `04-正反例避坑账.md`); both must map to the SAME on-disk 04 file.
-PROFILE_TEMPLATE_ALIASES = {"04-正反例避坑账.md": "04-反面案例清单.md"}
+# Legacy alias -> canonical hot-load name. The 6th profile ships under two
+# names in the wild (canonical `04-正反例避坑账.md` vs older real base
+# `04-反面案例清单.md`); both must map to the SAME on-disk 04 file.
+PROFILE_TEMPLATE_ALIASES = {"04-反面案例清单.md": "04-正反例避坑账.md"}
 
 
 def _canonical_profile_name(name: str) -> str:
@@ -758,7 +758,7 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
         if AGENTS_READ_ONLY and actual.name == "AGENTS.md":
             continue
         if not actual.is_file():
-            alt = profiles_dir / "04-正反例避坑账.md"
+            alt = profiles_dir / "04-反面案例清单.md"
             if actual.name.startswith("04-") and alt.is_file():
                 actual = alt.resolve()
                 if actual.parent != base:

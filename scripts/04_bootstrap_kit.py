@@ -26,10 +26,32 @@ import collections
 import importlib
 import pathlib
 import re
+import shutil
 import sqlite3
+import sys
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+
+# Canonical kit filename for section 04. Older real kits used the legacy
+# alias `04-反面案例清单.md`, which the validator still accepts on read.
+KIT_04_CANONICAL = "04-正反例避坑账.md"
+KIT_04_LEGACY = "04-反面案例清单.md"
+
+
+def _interpreter_prefix() -> str:
+    """Command prefix for commands written into the generated 00 index.
+
+    Prefer the ``py`` launcher pinned to the current interpreter's minor
+    version when it exists; otherwise plain ``python`` (``python3`` on POSIX).
+    The generated index also prints a plain-language fallback for machines
+    without the launcher, so a 3.11 / no-launcher machine is not stuck.
+    """
+    if shutil.which("py"):
+        return f"py -3.{sys.version_info.minor}"
+    if sys.platform == "win32":
+        return "python"
+    return "python3"
 
 VALIDATOR = importlib.import_module("03_validate_kit")
 
@@ -416,7 +438,7 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
 2. `01-身份与当前主线.md`：目前反复出现的项目/方向**候选**。
 3. `02-核心判断准则.md`：从原话中抽出的判断句。
 4. `03-硬规则与表达黑话.md`：硬约束与表达偏好。
-5. `04-反面案例清单.md`：踩坑/返工/有效做法的标本。
+5. `04-正反例避坑账.md`：踩坑/返工/有效做法的标本。
 
 ## 二、事实等级（必须遵守）
 
@@ -442,7 +464,7 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
 """
 
 
-def _index_md(records: list[Record], sources: list[tuple[str, int]]) -> str:
+def _index_md(records: list[Record], sources: list[tuple[str, int]], prefix: str) -> str:
     source_lines = "\n".join(f"- `{title}`：{count} 条" for title, count in sources[:12])
     return f"""# 00-总入口索引
 
@@ -456,25 +478,27 @@ def _index_md(records: list[Record], sources: list[tuple[str, int]]) -> str:
 | `01-身份与当前主线.md` | 身份/项目/方向候选 | 原话引用 |
 | `02-核心判断准则.md` | 判断句与取舍标准 | 原话引用 |
 | `03-硬规则与表达黑话.md` | 硬约束、表达偏好 | 原话引用 |
-| `04-反面案例清单.md` | 正例/反例标本 | 原话引用 |
+| `04-正反例避坑账.md` | 正例/反例标本 | 原话引用 |
 | `_evidence/chat-lines.md` | 行号化证据，供核对 | 原始证据 |
 
 ## 二、零环境 Agent 的可执行流程
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py doctor
-py -3.12 -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
+{prefix} -X utf8 scripts/xh.py doctor
+{prefix} -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2
+{prefix} -X utf8 scripts/xh.py validate --kit work/kit --strict
 ```
+
+> 解释器退路：上面的 `py -3.x` 依赖 Windows py launcher；没有 launcher 的机器把开头换成 `python`（Linux/macOS 用 `python3`），其余参数不变。
 
 如果 `build` 不可用，再按单步跑：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db
-py -3.12 -X utf8 scripts/xh.py bootstrap --db work/unified_index.db --out work/kit
-py -3.12 -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md
-py -3.12 -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2 --broad
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
+{prefix} -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db
+{prefix} -X utf8 scripts/xh.py bootstrap --db work/unified_index.db --out work/kit
+{prefix} -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md
+{prefix} -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2 --broad
+{prefix} -X utf8 scripts/xh.py validate --kit work/kit --strict
 ```
 
 `build` 生成初稿与二层候选；`backfill` 只生成待确认候选。两步都不会替本人签字。
@@ -482,8 +506,8 @@ py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
 ## 三、检索入口
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --keyword 项目 --limit 20
-py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --entity 知识库 --hops 2
+{prefix} -X utf8 scripts/xh.py retrieval --db work/unified_index.db --keyword 项目 --limit 20
+{prefix} -X utf8 scripts/xh.py retrieval --db work/unified_index.db --entity 知识库 --hops 2
 ```
 
 时间检索用 `--as-of`；关键词检索走 FTS5；图检索走 1~2 跳实体边。它们是辅助召回，不替代六份档案。
@@ -606,7 +630,7 @@ def _rules_md(items: list[Record]) -> str:
 
 def _cases_md(negatives: list[Record], positives: list[Record]) -> str:
     lines = [
-        "# 04-反面案例清单",
+        "# 04-正反例避坑账",
         "",
         "> **机器初稿**：正例/反例保留原话与出处；标签是机器加的，事实以原话为准。每条必须是具体场景 + 损失/后果的陈述句。",
         "",
@@ -697,27 +721,28 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
 
     top_sources_list = top_sources(records)
 
+    prefix = _interpreter_prefix()
     files = {
         "AGENTS.md": _agent_md(db_path, records, top_sources_list),
-        "00-总入口索引.md": _index_md(records, top_sources_list),
+        "00-总入口索引.md": _index_md(records, top_sources_list, prefix),
         "01-身份与当前主线.md": _identity_md(records, identity, mainline, history, top_sources_list),
         "02-核心判断准则.md": _principles_md(principles),
         "03-硬规则与表达黑话.md": _rules_md(rules),
-        "04-反面案例清单.md": _cases_md(negatives, positives),
+        KIT_04_CANONICAL: _cases_md(negatives, positives),
     }
     for name, body in files.items():
         (out_dir / name).write_text(body.rstrip() + "\n", encoding="utf-8")
 
-    # A fresh `xh.py init` copies the template `04-正反例避坑账.md` first;
-    # bootstrap writes the real `04-反面案例清单.md`. Leaving both makes the
-    # validator read the unfilled template. Remove only the known template.
-    legacy = out_dir / "04-正反例避坑账.md"
+    # Older real kits were written under the legacy alias `04-反面案例清单.md`.
+    # Drop a stale legacy copy from a reused output dir so the validator reads
+    # the canonical file; the alias still stays accepted on read by the validator.
+    legacy = out_dir / KIT_04_LEGACY
     if legacy.is_file():
         try:
             text = legacy.read_text(encoding="utf-8")
         except OSError:
             text = ""
-        if "04 · 正反例避坑账" in text or "<写清具体场景" in text:
+        if "04-反面案例清单" in text or "<写清具体场景" in text:
             legacy.unlink()
 
     ok, messages = VALIDATOR.validate_kit(out_dir, strict=True)
