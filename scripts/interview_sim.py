@@ -40,6 +40,15 @@ KIT_FILES = [
     "04-正反例避坑账.md",
 ]
 
+# Issue #85: identity branches the interview may follow. A transcript may
+# carry ``identity`` on any round; unknown values are rejected instead of being
+# silently treated as the default "唯一核心项目" path.
+IDENTITY_BRANCHES = {"学生", "在职", "多项目并行", "暂无核心项目"}
+
+# Issue #84: per-round product gate outcome. ``reask`` means the round's target
+# product was missing and the hoster re-asked once anchored to this round's answer.
+PRODUCT_GATES = {"ok", "reask"}
+
 
 class SimError(Exception):
     """可预期的人话错误，直接转成 exit 2。"""
@@ -161,9 +170,32 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
             for a in t_round.get("answers", [])
             if isinstance(a, dict) and "question" in a
         }
+
+        identity = str(t_round.get("identity", "")).strip()
+        if identity and identity not in IDENTITY_BRANCHES:
+            raise SimError(
+                f"第 {bank_round.index} 轮身份分支「{identity}」不在已知分支 "
+                f"{sorted(IDENTITY_BRANCHES)} 中。"
+            )
+
+        product_gate = str(t_round.get("product_gate", "ok")).strip() or "ok"
+        if product_gate not in PRODUCT_GATES:
+            raise SimError(
+                f"第 {bank_round.index} 轮产物门禁「{product_gate}」须为 "
+                f"{sorted(PRODUCT_GATES)}。"
+            )
+
+        carryover = str(t_round.get("carryover", "")).strip()
         round_lines: list[str] = []
         adopted_customs: list[str] = []
         closed_summary: list[str] = []
+
+        if identity:
+            round_lines.append(f"- 身份分支：{identity}")
+        if carryover:
+            round_lines.append(f"- 带入上一轮要点：{carryover}")
+        if product_gate == "reask":
+            round_lines.append("- 产物门禁：本轮目标产物未拿全，已基于本轮回答重问一次")
 
         for question in bank_round.questions:
             ans = answers.get(question.index)
@@ -232,6 +264,9 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
                 "adopted_customs": adopted_customs,
                 "positive": positive,
                 "negative": negative,
+                "identity": identity,
+                "product_gate": product_gate,
+                "carryover": carryover,
             }
         )
 

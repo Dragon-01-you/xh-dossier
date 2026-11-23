@@ -216,3 +216,101 @@ def test_every_round_has_custom_option():
 def test_open_example_slot_every_round():
     assert "每轮末尾的开放位" in skill
     assert "不要把所有正反例采集都压到第 6 轮" in skill
+
+
+# ---------------------------------------------------------------------------
+# Issue #83: paste/reference existing life narrative; Stage 3 reflow prefers
+# already-collected context before re-verifying [待确认] items.
+# ---------------------------------------------------------------------------
+
+def test_history_narrative_entry_in_skill_and_prompt():
+    for token in ("粘贴", "引用", "已有上下文"):
+        assert token in skill, f"SKILL.md 缺历史叙述入口字样：{token}"
+        assert token in prompt, f"网页提示词缺历史叙述入口字样：{token}"
+    assert "优先检索" in skill and "已有上下文" in skill
+
+
+# ---------------------------------------------------------------------------
+# Issue #84: missing target product triggers a re-ask anchored to this round's
+# answer; previous-round context is carried into the next question.
+# ---------------------------------------------------------------------------
+
+def test_product_gate_and_context_carryover_in_skill_and_prompt():
+    for token in ("重问", "上一轮", "产物门禁"):
+        assert token in skill, f"SKILL.md 缺门禁/带入规则：{token}"
+    assert "上一轮" in prompt and "重问" in prompt
+
+
+def test_sim_records_carryover_and_reask_gate():
+    bad = _transcript()
+    bad["rounds"][1]["carryover"] = "上一轮定了严谨合伙人站位"
+    bad["rounds"][2]["product_gate"] = "reask"
+    result = sim.run_interview(skill, bad)
+    by_round = {rec["round"]: rec for rec in result["records"]}
+
+    assert by_round[2]["carryover"] == "上一轮定了严谨合伙人站位"
+    assert "带入上一轮要点" in result["kit"]["00-总入口索引.md"]
+    assert by_round[3]["product_gate"] == "reask"
+    assert "产物门禁" in result["kit"]["01-身份与当前主线.md"]
+
+
+def test_sim_rejects_unknown_product_gate():
+    bad = _transcript()
+    bad["rounds"][0]["product_gate"] = "nope"
+    with pytest.raises(sim.SimError, match="产物门禁"):
+        sim.run_interview(skill, bad)
+
+
+# ---------------------------------------------------------------------------
+# Issue #85: identity branches — students / employed / parallel projects / no
+# core project — must appear in the skill, and the simulator must walk a
+# non-default branch.
+# ---------------------------------------------------------------------------
+
+def test_identity_branches_in_skill():
+    for branch in ("学生", "在职", "多项目并行", "暂无核心项目"):
+        assert branch in skill, f"SKILL.md 缺身份分支：{branch}"
+    assert "不存在“人人都有唯一核心项目”" in skill or "唯一核心项目" in skill
+
+
+def test_sim_walks_non_default_identity_branch():
+    candidate = _transcript()
+    candidate["rounds"][2]["identity"] = "学生"
+    result = sim.run_interview(skill, candidate)
+    r3 = next(rec for rec in result["records"] if rec["round"] == 3)
+    assert r3["identity"] == "学生"
+    assert "身份分支：学生" in result["kit"]["01-身份与当前主线.md"]
+
+
+def test_sim_rejects_unknown_identity_branch():
+    bad = _transcript()
+    bad["rounds"][2]["identity"] = "自由职业外星人"
+    with pytest.raises(sim.SimError, match="身份分支"):
+        sim.run_interview(skill, bad)
+
+
+# ---------------------------------------------------------------------------
+# Issue #86: address → identity/stage → concrete daily/weekly slots; the old
+# vague "排满" wording is gone.
+# ---------------------------------------------------------------------------
+
+def test_collection_order_and_concrete_slots():
+    assert "先问称呼" in skill or "开场先收" in skill
+    assert "每日" in skill and "每周" in skill
+    assert "乱排满" not in skill
+    assert "排满" not in skill or "不要让 AI 把日程排满" in skill
+    # Prompt mirrors the order: address first, identity before time slots.
+    assert "称呼" in prompt and "身份" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Issue #87: plain-language preamble (what / success looks like / what if stuck)
+# and goal-driven questioning instead of a fixed script.
+# ---------------------------------------------------------------------------
+
+def test_plain_language_preamble_and_goal_driven():
+    for token in ("成功", "失败怎么办", "前置说明"):
+        assert token in skill, f"SKILL.md 缺小白前置说明：{token}"
+    assert "按阶段目标出题" in skill or "目标" in skill
+    assert "示例" in skill and "固定题库" in skill
+    assert "成功" in prompt and "失败怎么办" in prompt
