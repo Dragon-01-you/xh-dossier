@@ -73,6 +73,10 @@ python -X utf8 scripts/99_smoke.py        # 输出 SMOKE_OK 即流水线可用�
 
 `00_doctor.py` 会**真实验证** Python ≥ 3.11、SQLite FTS5 + trigram 建表/插入/查询、工作目录可写、必需脚本与模板齐全；任一项不满足会给人话提示并以 exit 2 结束，不会把堆栈丢给你。可用 `--root 仓库目录` 指定仓库位置（省略时默认脚本所在仓库根目录）；`scripts/xh.py doctor` 提供同样的 `--root` 参数。
 
+#### Windows 一键安装（可选）
+
+在仓库根目录运行：`powershell -ExecutionPolicy Bypass -File install.ps1`。默认安装到 `%USERPROFILE%\XH-Dossier`；已有目录会覆盖同名文件，想显式覆盖可加 `-Force`。
+
 #### 机器上没有 Python 怎么办（最低版本 3.11）
 
 本系统核心路径只依赖 Python 标准库，但仍需要一个 **Python 3.11 或更新版本** 的解释器。检测不到 Python 时，`install.ps1` 会直接报失败并给出入口，任选其一装好后重跑即可：

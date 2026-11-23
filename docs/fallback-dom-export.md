@@ -45,10 +45,10 @@ python -X utf8 scripts/01_clean_and_index.py --raw <dom导出目录> --db <输�
 
 ## 4. 真实验证证据（2026-11-23）
 
-- 导出文件：`D:\xh_auto\xh-runs\browser-e2e\raw-doubao-dom\豆包 - 字节跳动旗下 AI 智能助手.md`
+- 导出文件：`work/raw/豆包 - 字节跳动旗下 AI 智能助手.md`
   - 大小 **20,139 bytes**，148 行；
   - 结构：`## Metadata` → `## Conversation` → 4 条消息（`### 🧑‍💻 User` L10 / `### 🤖 Assistant` L85 / `### 🧑‍💻 User` L103 / `### 🤖 Assistant` L114）。
-- 索引结果（`D:\xh_auto\xh-runs\browser-e2e\01-dom.log`）：
+- 索引结果（`work/evidence/01-dom.log`）：
 
 ```
 INDEX_OK total_raw=4 dedup_skipped=0 indexed=4

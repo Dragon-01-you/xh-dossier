@@ -67,7 +67,7 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
 4. 保留 `[待确认]`，不要用常识补全；本人签字后才可用 `backfill --apply-signed --confirm` 写入正式档案；
 5. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
 6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿；
-7. 复核通过后落回执：`py -3.12 -X utf8 scripts/xh.py review --confirm --kit work/kit`。
+7. 复核通过后落回执：`python -X utf8 scripts/xh.py review --confirm --kit work/kit`。
    build 回执与档案旁的 `_evidence/review.json` 初始状态都是 `pending_review`；
    没跑这一步，`verify` 与 S7 三问盲测会被阻断，并提示先复核，Agent 不能自行代签。
 
@@ -164,7 +164,7 @@ python -X utf8 scripts/xh.py verify --kit work/kit --strict
 ```
 
 看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。
-盲测包由 `py -3.12 -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
+盲测包由 `python -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
 
 ## 4. 快速演示（不访谈、不导出）
 

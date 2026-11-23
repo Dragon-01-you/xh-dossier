@@ -18,13 +18,13 @@
 
 ```powershell
 # 默认：结构校验 + 评分卡（评分卡仅提示，不翻转 VALIDATE_OK）
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
+python -X utf8 scripts/xh.py validate --kit work/kit --strict
 
 # 阈值不达标时直接判 FAIL（把评分卡接进门禁）
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict --enforce-score
+python -X utf8 scripts/xh.py validate --kit work/kit --strict --enforce-score
 
 # 跳过评分卡（只看结构）
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --no-scorecard
+python -X utf8 scripts/xh.py validate --kit work/kit --no-scorecard
 ```
 
 脚本入口：`scripts/03_validate_kit.py` 的 `score_kit()` / `format_scorecard()`；

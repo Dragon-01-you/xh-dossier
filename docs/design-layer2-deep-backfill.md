@@ -1,12 +1,12 @@
 # xh-dossier 二次回流（Layer-2 Deep Backfill）机制任务书
 
 > 调研日期：2026-11-22 ｜ 性质：Read-only 调研 + 可执行任务书（**本次不改项目代码**）
-> 目标项目：`E:/项目工作区/test-xh-dossier`
-> 交付物：本文件 `E:/个人知识库/outputs/二次回流机制任务书.md`
+> 目标项目：`<你的项目工作区>/xh-dossier`
+> 交付物：本文件 `<你的知识库>/outputs/二次回流机制任务书.md`
 >
 > **标注约定**（与同系列《检索第3-4层落地任务书》一致）：
 > `[代码确认]` = 已读项目源码/脚本确认；`[数据确认]` = 已查 `work/real_index.db` 与 `work/*.md` 实跑输出确认；
-> `[档案确认]` = 已读 `E:/芯火知识库/芯火知识库/个人知识库/00-热加载核心/` 六份档案确认；
+> `[档案确认]` = 已读 `<你的知识库>/00-热加载核心/` 六份档案确认；
 > `[用户原话]` = 用户在本任务中的直接表述；`[设计推断]` = 本任务书的设计主张/推断，**未被代码或数据证实**。
 
 ---
@@ -132,7 +132,7 @@ REC-0489  →「https://github.com/… 你需要去上面这个网址把…」�
   - `01`：`## 一、不可篡改的核心事实` / `## 二、当前主线定调与明确放弃项`。
   - `03`：`## 一、对任何接手 AI 的 11 条硬规则` / `## 三、核心黑话与已纠偏词典`。
   - `00`：`## 二、七步闭环流程`（一般只放指针，不堆细节）。
-- 硬规矩：`AGENTS.md:33`——"`02-资产/` 预铸卡或过程归档在终签前统一标 `[待本人最终签字放行]`，只有经芯火本人真实检查并签字确认后才算正式结项生效"；`AGENTS.md:32`——独立上下文 AI 双尺审查（Standards + Spec）≤ 3 轮。**六份档案正文当前没有 `[待确认]` 字样**，L2 必须自带待确认区且不碰正式正文。
+- 硬规矩：`AGENTS.md:33`——"`02-资产/` 预铸卡或过程归档在终签前统一标 `[待本人最终签字放行]`，只有经本人真实检查并签字确认后才算正式结项生效"；`AGENTS.md:32`——独立上下文 AI 双尺审查（Standards + Spec）≤ 3 轮。**六份档案正文当前没有 `[待确认]` 字样**，L2 必须自带待确认区且不碰正式正文。
 
 ---
 
@@ -142,7 +142,7 @@ REC-0489  →「https://github.com/… 你需要去上面这个网址把…」�
 
 | 输入 | 路径 | 用途 |
 |---|---|---|
-| **A. 第一次回流后的档案正文** | `E:/芯火知识库/芯火知识库/个人知识库/00-热加载核心/{AGENTS.md,00~04}.md`（只读） | 构建"已讲过集合"： extracts 已有 `REC-` 引用、日期、主题实词、正/反例标题 |
+| **A. 第一次回流后的档案正文** | `<你的知识库>/00-热加载核心/{AGENTS.md,00~04}.md`（只读） | 构建"已讲过集合"： extracts 已有 `REC-` 引用、日期、主题实词、正/反例标题 |
 | **B. 第一层候选报告** | `work/real_backfill.md`（含 `[待确认]` 与模式归属） | 区分"已进 L1 待确认"与"L1 完全没召回"；避免 L2 与 L1 重复产出 |
 | **C. 冷库原文** | `work/real_index.db`（`records` 表） | 差集挖掘的数据源 |
 
@@ -319,13 +319,13 @@ def main() -> int
 ```bash
 # 生成候选（只读，不改档案）
 python -X utf8 scripts/05_deep_backfill.py \
-  --profiles "E:/芯火知识库/芯火知识库/个人知识库/00-热加载核心" \
+  --profiles "<你的知识库>/00-热加载核心" \
   --first-pass work/real_backfill.md \
   --db work/real_index.db --out work/l2_candidates.md \
   --patches work/l2_profile_patches --ledger work/l2_review.jsonl
 
 # 审查/签字（改台账，不改档案）
-python -X utf8 scripts/05_deep_backfill.py --ledger work/l2_review.jsonl --sign L2-0007 --by "芯火"
+python -X utf8 scripts/05_deep_backfill.py --ledger work/l2_review.jsonl --sign L2-0007 --by "本人"
 
 # 仅把已签字条目写回正式正文（二次确认）
 python -X utf8 scripts/05_deep_backfill.py --apply-signed --confirm ...
@@ -394,7 +394,7 @@ for token in ("[待确认]", "REC-", "本人签字", "独立 AI 双尺审查", "
 mod05.update_review(ledger, "L2-0001", "reviewed", "审查员", "passed")
 applied = mod05.apply_signed(patches_dir, profiles_dir, ledger, confirm=True)
 assert applied["applied"] == 0
-mod05.update_review(ledger, "L2-0001", "signed", "芯火", "本人确认")
+mod05.update_review(ledger, "L2-0001", "signed", "本人", "本人确认")
 assert mod05.apply_signed(patches_dir, profiles_dir, ledger, confirm=True)["applied"] == 1
 
 # 12. 无 LLM 降级：不虚构摘要、显式标注
@@ -466,7 +466,7 @@ assert "本条由模型提炼" not in md_off
 4. **M4 真实库验收**：跑 `real_index.db`，核对"助词 Top20=0、16 条错配降到个位数、候选 ≤30 条"，人工抽查 20 条亲历占比。
 5. **M5（可选）LLM 增强**：仅在 M1~M4 通过且本人要求时接入，提炼句一律标 `[LLM生成·待本人签字]`。
 
-> **本次任务边界重申**：以上均为任务书设计；未修改 `E:/项目工作区/test-xh-dossier` 任何代码或数据，唯一写入是本文档。
+> **本次任务边界重申**：以上均为任务书设计；未修改 `<你的项目工作区>/xh-dossier` 任何代码或数据，唯一写入是本文档。
 
 ---
 

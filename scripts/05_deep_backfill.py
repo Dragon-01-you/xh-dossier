@@ -59,7 +59,7 @@ GRAM_PARTICLES = set("了的是")
 # Common content-word characters (verbs/nouns/adjectives) — filters out pure
 # auxiliary phrases. Extensible; jieba.posseg could replace this if available.
 CONTENT_HINT = set(
-    "开工定验收标准做完交付上线拖延踩坑放弃闲鱼振兴杯笔记知识库向量回流截图封面钩子公司群"
+    "开工定验收标准做完交付上线拖延踩坑放弃笔记知识库向量回流截图封面钩子公司群"
     "工验收准备文件返复理解问题学习项目任务时间日月年份代码工具脚本数据报告内容方案"
     "改错失败成功试换删改建读看写说听做买卖教练习记录整理发布解释重新开始结束"
 )
