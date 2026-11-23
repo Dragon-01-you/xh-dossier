@@ -14,6 +14,7 @@ import argparse
 import json
 import pathlib
 import shutil
+import sqlite3
 import subprocess
 import sys
 import zipfile
@@ -376,6 +377,12 @@ def package(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dir_file_count(folder: pathlib.Path) -> tuple[pathlib.Path | None, int]:
+    if not folder.is_dir():
+        return None, 0
+    return folder, len([p for p in folder.iterdir() if p.is_file()])
+
+
 def status(args: argparse.Namespace) -> int:
     print("root:", ROOT)
     print("python:", sys.version.split()[0])
@@ -383,6 +390,50 @@ def status(args: argparse.Namespace) -> int:
         folder = WORK / name
         count = len([p for p in folder.iterdir() if p.is_file()]) if folder.is_dir() else 0
         print(f"{name}: {folder} ({count} files)")
+
+    # Issue #99: optional custom dataset views. Without these flags the default
+    # work/ layout above is unchanged; each flag points status at a separate
+    # raw dir / kit dir / db / report so multiple datasets stay distinguishable.
+    raw_dir = getattr(args, "raw", None)
+    if raw_dir:
+        folder, count = _dir_file_count(pathlib.Path(raw_dir).expanduser())
+        if folder is None:
+            print(f"raw-custom: {raw_dir} (missing)")
+        else:
+            print(f"raw-custom: {folder} ({count} files)")
+
+    kit_dir = getattr(args, "kit", None)
+    if kit_dir:
+        folder, count = _dir_file_count(pathlib.Path(kit_dir).expanduser())
+        if folder is None:
+            print(f"kit-custom: {kit_dir} (missing)")
+        else:
+            md_count = len([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".md"])
+            print(f"kit-custom: {folder} ({count} files, {md_count} markdown)")
+
+    db_path = getattr(args, "db", None)
+    if db_path:
+        db = pathlib.Path(db_path).expanduser()
+        if not db.is_file():
+            print(f"db: {db} (missing)")
+        else:
+            try:
+                con = sqlite3.connect(str(db))
+                records = con.execute("SELECT count(*) FROM records").fetchone()[0]
+                con.close()
+                print(f"db: {db} ({records} records, {db.stat().st_size} bytes)")
+            except sqlite3.Error as exc:
+                print(f"db: {db} (unreadable: {exc})")
+
+    report_path = getattr(args, "report", None)
+    if report_path:
+        report = pathlib.Path(report_path).expanduser()
+        if not report.is_file():
+            print(f"report: {report} (missing)")
+        else:
+            lines = len(report.read_text(encoding="utf-8", errors="replace").splitlines())
+            print(f"report: {report} ({lines} lines, {report.stat().st_size} bytes)")
+
     print("scripts:", ", ".join(p.name for p in (ROOT / "scripts").glob("*.py")))
     return 0
 
@@ -472,7 +523,11 @@ def main() -> int:
     p.add_argument("--out", default=str(ROOT / "dist" / "xh-dossier.zip"))
     p.set_defaults(func=package)
 
-    p = sub.add_parser("status", help="show work dirs and scripts")
+    p = sub.add_parser("status", help="show work dirs and scripts; optional custom dataset views (#99)")
+    p.add_argument("--raw", default=None, type=pathlib.Path, help="custom raw export dir to count")
+    p.add_argument("--kit", default=None, type=pathlib.Path, help="custom kit dir to count")
+    p.add_argument("--db", default=None, type=pathlib.Path, help="custom SQLite index to count records")
+    p.add_argument("--report", default=None, type=pathlib.Path, help="custom report file to count lines")
     p.set_defaults(func=status)
 
     args = parser.parse_args()
