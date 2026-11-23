@@ -331,8 +331,20 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[dict[str, str]]:
-    """Run exact keyword search using FTS5 trigram (>=3 chars) with escaped SQL LIKE fallback (<3 chars)."""
+def search_keyword(
+    db_path: pathlib.Path,
+    query: str,
+    limit: int = 20,
+    role: str | None = None,
+    role_sort: bool = True,
+) -> list[dict[str, str]]:
+    """Run exact keyword search using FTS5 trigram (>=3 chars) with escaped SQL LIKE fallback (<3 chars).
+
+    Issue #95: ``role`` filters to ``user`` / ``assistant`` (None = all); with
+    ``role_sort`` (default) the user's own words are placed ahead of assistant
+    replies, so an AI reply cannot silently occupy the top of the recall list.
+    The stable sort keeps the original FTS order inside each role group.
+    """
     if not db_path.is_file():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
@@ -351,9 +363,8 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
                 FROM records_fts f
                 JOIN records r ON r.rec_id = f.rec_id
                 WHERE records_fts MATCH ?
-                LIMIT ?
                 """,
-                (safe_q, limit),
+                (safe_q,),
             ).fetchall()
         else:
             escaped = _escape_like(q)
@@ -362,11 +373,16 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
                 SELECT *
                 FROM records
                 WHERE content LIKE ? ESCAPE '\\'
-                LIMIT ?
                 """,
-                (f"%{escaped}%", limit),
+                (f"%{escaped}%",),
             ).fetchall()
-        return [dict(row) for row in rows]
+        results = [dict(row) for row in rows]
+        if role:
+            wanted = role.lower()
+            results = [r for r in results if str(r.get("role", "")).lower() == wanted]
+        if role_sort:
+            results.sort(key=lambda r: 0 if str(r.get("role", "")).lower() == "user" else 1)
+        return results[:limit]
     finally:
         con.close()
 
