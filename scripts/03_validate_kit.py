@@ -257,6 +257,150 @@ def _section_lines(lines: list[str], heading_keyword: str) -> list[tuple[int, st
     return out
 
 
+# --- Issue #96 scorecard: decidable "good enough" metrics on top of structure ---
+
+# Slot -> (kit file canonical, section heading keyword). A slot counts as filled
+# only when it holds at least one sourced bullet (raw candidate or A-level
+# interview fact), not an empty note or a machine padding sentence.
+SCORE_SLOTS: dict[str, tuple[str, str]] = {
+    "identity": ("01-身份与当前主线.md", "身份候选"),
+    "mainline": ("01-身份与当前主线.md", "当前主线候选"),
+    "principle": ("02-核心判断准则.md", "有据判断"),
+    "rule": ("03-硬规则与表达黑话.md", "硬规则"),
+    "positive": ("04-正反例避坑账.md", "正例"),
+    "negative": ("04-正反例避坑账.md", "反例"),
+}
+
+# Three blind-test questions (issue #98) answered from the kit alone.
+ANSWERABLE_QUESTIONS = {
+    "身份是谁": "identity",
+    "当前主线": "mainline",
+    "判断准则": "principle",
+}
+
+# Default thresholds; issue #96 leaves the exact cut lines for the user to
+# tune. They are exposed as constants so a call site can override them.
+SCORE_THRESHOLDS: dict[str, float] = {
+    "coverage": 0.8,                  # filled slots / 6
+    "answerable_questions": 2 / 3,    # answered questions / 3
+    "citation_accuracy": 0.9,         # resolvable sourced bullets / checked
+    "mainline_unique": 1.0,           # 1 when mainline has <= 1 candidate
+}
+
+_BULLET_PREFIXES = ("- **候选", "- **A级·访谈")
+
+
+def _is_sourced_bullet(line: str) -> bool:
+    return line.startswith(_BULLET_PREFIXES) and bool(HAS_QUOTE_RE.search(line)) and bool(HAS_SOURCE_RE.search(line))
+
+
+def _slot_bullets(target_dir: pathlib.Path, slot: str) -> list[tuple[str, str]]:
+    file_name, heading = SCORE_SLOTS[slot]
+    fpath = find_kit_file(target_dir, file_name)
+    if fpath is None:
+        return []
+    lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+    in_section = False
+    out: list[tuple[str, str]] = []
+    for line in lines:
+        if line.startswith("## "):
+            in_section = heading in line
+            continue
+        if in_section and _is_sourced_bullet(line):
+            out.append((fpath.name, line))
+    return out
+
+
+def score_kit(
+    target_dir: pathlib.Path,
+    source_roots: list[pathlib.Path] | None = None,
+    thresholds: dict[str, float] | None = None,
+) -> dict[str, object]:
+    """Compute decidable quality metrics for a kit.
+
+    Metrics:
+    - coverage: filled sourced slots / 6;
+    - answerable_questions: blind-test questions answerable from the kit / 3;
+    - citation_accuracy: sourced bullets whose source resolves in the kit / checked;
+      noise rate is the complement;
+    - mainline_unique: mainline section holds at most one sourced candidate.
+
+    The scorecard never invents facts: an empty section counts as unfilled, and
+    an unresolved citation counts against accuracy.
+    """
+    th = dict(SCORE_THRESHOLDS)
+    if thresholds:
+        th.update(thresholds)
+
+    slot_bullets = {slot: _slot_bullets(target_dir, slot) for slot in SCORE_SLOTS}
+    filled = {slot: bool(bullets) for slot, bullets in slot_bullets.items()}
+    missing_slots = [slot for slot, ok in filled.items() if not ok]
+
+    coverage = sum(filled.values()) / len(SCORE_SLOTS)
+    answered = [q for q, slot in ANSWERABLE_QUESTIONS.items() if filled[slot]]
+    answerable = len(answered) / len(ANSWERABLE_QUESTIONS)
+
+    checked: list[tuple[str, str]] = [b for bullets in slot_bullets.values() for b in bullets]
+    unresolved: list[str] = []
+    for file_name, line in checked:
+        reason = _verify_pending_source(line, target_dir, source_roots)
+        if reason:
+            unresolved.append(f"{file_name}: {reason}")
+    accuracy = 1.0 if not checked else (len(checked) - len(unresolved)) / len(checked)
+    noise_rate = 1.0 - accuracy
+
+    # Mainline uniqueness counts raw B-level candidates only; the A-level
+    # interview mainline is the confirmed baseline answer, not a competing draft.
+    mainline_count = sum(1 for _name, line in slot_bullets["mainline"] if line.startswith("- **候选"))
+    mainline_unique = mainline_count <= 1
+
+    metrics: dict[str, dict[str, object]] = {
+        "coverage": {
+            "value": coverage, "threshold": th["coverage"], "passed": coverage >= th["coverage"],
+            "detail": f"已覆盖 {sum(filled.values())}/6 个槽位" + (f"；缺：{', '.join(missing_slots)}" if missing_slots else ""),
+        },
+        "answerable_questions": {
+            "value": answerable, "threshold": th["answerable_questions"],
+            "passed": answerable >= th["answerable_questions"],
+            "detail": f"三问可答 {len(answered)}/3" + (f"；未答：{', '.join(q for q in ANSWERABLE_QUESTIONS if q not in answered)}" if len(answered) < 3 else ""),
+        },
+        "citation_accuracy": {
+            "value": accuracy, "threshold": th["citation_accuracy"],
+            "passed": accuracy >= th["citation_accuracy"],
+            "detail": f"引用 {len(checked) - len(unresolved)}/{len(checked)} 可追溯；噪声率 {noise_rate:.2f}"
+                      + (f"；不可追溯：{'; '.join(unresolved[:3])}" if unresolved else ""),
+        },
+        "mainline_unique": {
+            "value": 1.0 if mainline_unique else 0.0, "threshold": th["mainline_unique"],
+            "passed": mainline_unique,
+            "detail": f"主线候选 {mainline_count} 条" + ("（唯一）" if mainline_unique else "（超过 1 条，其余应进历史区）"),
+        },
+    }
+    overall = all(bool(m["passed"]) for m in metrics.values())
+    return {
+        "metrics": metrics,
+        "overall_passed": overall,
+        "counts": {slot: len(bullets) for slot, bullets in slot_bullets.items()},
+        "missing_slots": missing_slots,
+        "unresolved": unresolved,
+    }
+
+
+def format_scorecard(card: dict[str, object]) -> list[str]:
+    """Render the scorecard as human-readable diagnostics with per-metric PASS/FAIL."""
+    lines = ["SCORECARD:"]
+    metrics = card["metrics"]
+    order = ["coverage", "answerable_questions", "citation_accuracy", "mainline_unique"]
+    for name in order:
+        m = metrics[name]
+        verdict = "PASS" if m["passed"] else "FAIL"
+        value = m["value"]
+        threshold = m["threshold"]
+        shown = f"{value:.2f}" if isinstance(value, float) else str(value)
+        lines.append(f"- [{verdict}] {name}: {shown} ≥ {threshold:.2f} — {m['detail']}")
+    lines.append("SCORECARD_OK" if card["overall_passed"] else "SCORECARD_FAIL: 见上方未达标指标；阈值见 docs/scorecard.md，可由用户裁定调整。")
+    return lines
+
 def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
     """Read-only semantic audit: structure can pass while semantics are empty/weak.
 
@@ -453,6 +597,8 @@ def validate_kit(
     strict: bool = False,
     forbidden_terms: list[str] | None = None,
     source_roots: list[pathlib.Path] | None = None,
+    scorecard: bool = True,
+    enforce_score: bool = False,
 ) -> tuple[bool, list[str]]:
     """Return (passed, diagnostics) checking all 6 kit files under target_dir."""
     diagnostics: list[str] = []
@@ -551,6 +697,14 @@ def validate_kit(
     else:
         diagnostics.append("SEMANTIC_OK: 六条语义抽查项通过。")
 
+    # Issue #96: decidable scorecard. Advisory by default; `enforce_score` flips
+    # the structural pass when a threshold is missed, and names what is missing.
+    if scorecard:
+        card = score_kit(target_dir, source_roots)
+        diagnostics.extend(format_scorecard(card))
+        if enforce_score and not card["overall_passed"]:
+            passed = False
+
     return passed, diagnostics
 
 
@@ -570,6 +724,9 @@ def main() -> int:
         type=pathlib.Path,
         help="额外目录：解析 [待确认] 的 出处：<file>:<line>（可多次传入）",
     )
+    parser.add_argument("--no-scorecard", action="store_true", help="skip the issue #96 scorecard")
+    parser.add_argument("--enforce-score", action="store_true",
+                        help="flip PASS to FAIL when a scorecard threshold is missed")
     args = parser.parse_args()
 
     ok, msgs = validate_kit(
@@ -577,6 +734,8 @@ def main() -> int:
         strict=args.strict,
         forbidden_terms=args.forbidden,
         source_roots=args.source_root,
+        scorecard=not args.no_scorecard,
+        enforce_score=args.enforce_score,
     )
     for m in msgs:
         print(m)
