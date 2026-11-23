@@ -24,8 +24,6 @@ py -3.12 -X utf8 scripts/xh.py init
 - `reports/`、`evidence/`
 
 > **注意（不是安装失败）**：`init` 之后 `work/kit/` 是空白模板，里面的 `<...>` 占位符还没填。这时直接 `validate --strict` 会报占位符，属正常现象。下一步：把聊天记录放进 `work/raw/` 跑 `build`，或先做 S1 访谈，再校验。
->
-> **解压注意**：Linux 旧版 `unzip`（Info-ZIP 6.00）可能把中文模板文件名解成乱码；改用 `python -m zipfile -e xh-dossier.zip repo` 或 `unzip -O UTF-8 xh-dossier.zip -d repo`。doctor 检测到乱码会直接给这条退路，不会误报“缺模板”。
 
 ## 2. 只有聊天记录，先出一版 6 份初稿（推荐）
 

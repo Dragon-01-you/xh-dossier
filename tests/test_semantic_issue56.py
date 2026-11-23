@@ -6,8 +6,10 @@ Covers, with checkable rules (not "feels better"):
 - rule_shape / case_shape predicates on real strings pulled from the before-fix
   real-729 draft;
 - validator semantic audit flags padded/empty/non-rule/request sections;
-- doctor distinguishes a real missing file from a garbled filename;
 - bootstrap emits at most one current mainline, no principle padding, no request case.
+
+Encoding/mojibake diagnosis belongs to #55 / PR #64 (scripts/archive_io.py),
+not this file.
 """
 
 from __future__ import annotations
@@ -17,14 +19,11 @@ import pathlib
 import sqlite3
 import sys
 
-import pytest
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 vk = importlib.import_module("03_validate_kit")
 bootstrap = importlib.import_module("04_bootstrap_kit")
-doctor = importlib.import_module("00_doctor")
 
 
 # --- Real strings from the before-fix real-729 draft (issue #56 evidence) ---
@@ -167,26 +166,6 @@ def test_audit_does_not_flip_structural_pass(tmp_path: pathlib.Path) -> None:
     assert ok is True  # structure itself is intact
     assert any(d.startswith("SEMANTIC_REVIEW:") for d in diags), diags
     assert any(d.startswith("SEMANTIC: [SEMANTIC_") for d in diags), diags
-
-
-def test_doctor_distinguishes_mojibake_from_missing(tmp_path: pathlib.Path) -> None:
-    repo = tmp_path / "repo"
-    (repo / "templates").mkdir(parents=True)
-    # Garbled name produced by Info-ZIP 6.00 ignoring the UTF-8 zip flag.
-    (repo / "templates" / "00-цА╗хЕехПгч┤вх╝Х.md").write_text("x", encoding="utf-8")
-    with pytest.raises(doctor.DoctorError) as exc:
-        doctor.check_files(repo)
-    msg = str(exc.value)
-    assert "乱码" in msg
-    assert "zipfile" in msg
-
-
-def test_doctor_real_missing_still_reports_missing(tmp_path: pathlib.Path) -> None:
-    repo = tmp_path / "repo"
-    (repo / "templates").mkdir(parents=True)
-    with pytest.raises(doctor.DoctorError) as exc:
-        doctor.check_files(repo)
-    assert "缺少必需文件" in str(exc.value)
 
 
 def _bootstrap_db(tmp_path: pathlib.Path) -> pathlib.Path:

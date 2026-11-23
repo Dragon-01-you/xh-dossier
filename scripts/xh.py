@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -111,19 +110,6 @@ def doctor(args: argparse.Namespace) -> int:
         templates[name] = _kit_actual_name(TEMPLATES, name) is not None
         if not templates[name]:
             errors.append(f"missing template {name}")
-
-    if not all(templates.values()) and TEMPLATES.is_dir():
-        garbled = [
-            p.name for p in TEMPLATES.iterdir()
-            if p.is_file() and re.match(r"^\d{2}-", p.name)
-            and re.search(r"[�Ѐ-ӿ─-╿]", p.name)
-        ]
-        if garbled:
-            errors.append(
-                "template filenames look garbled (encoding broken on unzip), not truly missing: "
-                "use `python -m zipfile -e xh-dossier.zip repo` or `unzip -O UTF-8 xh-dossier.zip -d repo`; "
-                f"sample: {garbled[0]}"
-            )
 
     sample_count = 0
     if SAMPLE_RAW.is_dir():
