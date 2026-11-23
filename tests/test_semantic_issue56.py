@@ -217,7 +217,7 @@ def test_bootstrap_emits_clean_semantic_kit(tmp_path: pathlib.Path) -> None:
     for padding in ("先确认目标与验收，再谈执行速度", "先保真实与可复现，再谈漂亮表达", "先做最小闭环，再扩规模"):
         assert padding not in text02
 
-    text04 = (kit / "04-反面案例清单.md").read_text(encoding="utf-8")
+    text04 = (kit / "04-正反例避坑账.md").read_text(encoding="utf-8")
     assert "怎么搜" not in text04
 
     assert vk.audit_semantics(kit) == []

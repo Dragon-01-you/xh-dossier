@@ -304,7 +304,7 @@ def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
                     f"规则候选不像持久硬规则（{reason}）：技术摘录 / 单次任务指令 / 对话句应过滤",
                 ))
 
-    f04 = find_kit_file(target_dir, "04-反面案例清单.md")
+    f04 = find_kit_file(target_dir, "04-正反例避坑账.md")
     if f04 is not None:
         lines = f04.read_text(encoding="utf-8", errors="replace").splitlines()
         for lineno, line in _section_lines(lines, "标本"):
@@ -580,6 +580,12 @@ def main() -> int:
     )
     for m in msgs:
         print(m)
+    if not ok and any(m.startswith("UNFILLED") for m in msgs):
+        print(
+            "NOTE: 以上 UNFILLED 占位符来自「还没填的空白模板」，不是安装失败。"
+            "下一步：把聊天记录放进 work/raw 跑 build，或先完成 6 轮访谈填完模板，再重跑本校验；"
+            "语义提示同理，按「需访谈」处理或补原话。"
+        )
     print("VALIDATE_OK" if ok else "VALIDATE_FAIL")
     return 0 if ok else 1
 

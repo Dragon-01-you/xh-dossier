@@ -35,7 +35,7 @@
 ## 验收
 
 ```bash
-py -3.12 scripts/01_clean_and_index.py --raw <raw> --db <db> --query 大一
+python3 scripts/01_clean_and_index.py --raw <raw> --db <db> --query 大一
 ```
 
 期望：`INDEX_OK`，查询行显示 `said=... | event=... | retrospective`；`event_date` 为 `[记忆，待核]` 或可核对日期，不是简单复制 `created_at`。
