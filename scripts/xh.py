@@ -48,6 +48,48 @@ KIT_FILES = [
     "04-正反例避坑账.md",
 ]
 
+# Issue #90: every freshly built draft starts as review_status=pending. Only a
+# human `review --confirm` flips it to confirmed; verify / downstream S7 block
+# until then. The sidecar lives next to the kit so the gate follows the kit.
+REVIEW_STATUS_REL = pathlib.Path("_evidence") / "review.json"
+REVIEW_PENDING = "pending_review"
+REVIEW_CONFIRMED = "reviewed"
+
+
+def _review_status_path(kit: pathlib.Path) -> pathlib.Path:
+    return kit / REVIEW_STATUS_REL
+
+
+def _read_review_status(kit: pathlib.Path) -> str:
+    path = _review_status_path(kit)
+    if not path.is_file():
+        return REVIEW_PENDING
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return REVIEW_PENDING
+    status = str(data.get("status", REVIEW_PENDING)).strip()
+    return status if status in (REVIEW_PENDING, REVIEW_CONFIRMED) else REVIEW_PENDING
+
+
+def _write_review_status(kit: pathlib.Path, status: str, note: str = "") -> pathlib.Path:
+    path = _review_status_path(kit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"status": status, "at": _now(), "note": note}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def review_block_reason(kit: pathlib.Path) -> str | None:
+    """Human-readable blocker when the kit has not been personally confirmed."""
+    if _read_review_status(kit) == REVIEW_CONFIRMED:
+        return None
+    return (
+        f"REVIEW_NOT_REVIEWED: 六份档案还没经过本人复核（review_status=pending_review，{kit}）。"
+        "下游检索与 S7 三问盲测必须等复核回执落盘后再跑；"
+        f"复核命令：py -3.12 -X utf8 scripts/xh.py review --confirm --kit {kit}"
+    )
+
 
 def _now() -> str:
     return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
@@ -290,8 +332,13 @@ def build(args: argparse.Namespace) -> int:
                 return rc
     rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
                "--target", str(kit), "--strict"])
+    # Issue #90: a fresh draft is always pending personal review; confirmation
+    # is a separate human action (`review --confirm`), never an Agent step.
+    _write_review_status(kit, REVIEW_PENDING, note="fresh build; pending personal review")
+    # Keep the legacy state names from the ticket: pending_review / reviewed.
     payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2),
-                        report=str(report), interview=str(interview) if interview else None)
+                        report=str(report), interview=str(interview) if interview else None,
+                        review_status=REVIEW_PENDING)
     path = _write_receipt("build", payload)
     print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
     print("receipt:", path)
@@ -340,12 +387,38 @@ def validate(args: argparse.Namespace) -> int:
     return _run(cmd)
 
 
+def review(args: argparse.Namespace) -> int:
+    """Issue #90: read or flip the personal-review status of a kit."""
+    kit = pathlib.Path(args.kit).expanduser()
+    if args.confirm:
+        if not kit.is_dir():
+            print("REVIEW_FAIL: kit directory missing:", kit)
+            return 2
+        path = _write_review_status(kit, REVIEW_CONFIRMED,
+                                     note=args.note or "confirmed by the user")
+        payload = _receipt("review", True, kit=str(kit), review_status=REVIEW_CONFIRMED,
+                           sidecar=str(path))
+        _write_receipt("review", payload)
+        print("REVIEW_CONFIRMED:", kit)
+        return 0
+    status = _read_review_status(kit)
+    print(f"REVIEW_STATUS: {status} ({kit})")
+    return 0 if status == REVIEW_CONFIRMED else 1
+
+
 def verify(args: argparse.Namespace) -> int:
     kit = pathlib.Path(args.kit).expanduser()
     missing = [name for name in KIT_FILES if _kit_actual_name(kit, name) is None]
     if missing:
         print("VERIFY_FAIL")
         print("MISSING:", ", ".join(missing))
+        return 1
+    # Issue #90: structural validity is not personal sign-off. Block downstream
+    # use until a human confirms the kit; the message says exactly what to run.
+    blocker = review_block_reason(kit)
+    if blocker:
+        print("VERIFY_BLOCKED_REVIEW")
+        print(blocker)
         return 1
     return validate(argparse.Namespace(kit=str(kit), strict=bool(args.strict)))
 
@@ -426,10 +499,16 @@ def main() -> int:
     p.add_argument("--strict", action="store_true")
     p.set_defaults(func=validate)
 
-    p = sub.add_parser("verify", help="check 6 files exist and validate")
+    p = sub.add_parser("verify", help="check 6 files exist, review status, and validate")
     p.add_argument("--kit", default=str(WORK / "kit"))
     p.add_argument("--strict", action="store_true")
     p.set_defaults(func=verify)
+
+    p = sub.add_parser("review", help="read or set the personal-review status of a kit")
+    p.add_argument("--kit", default=str(WORK / "kit"))
+    p.add_argument("--confirm", action="store_true", help="mark the kit as personally confirmed")
+    p.add_argument("--note", default=None, help="optional confirmation note")
+    p.set_defaults(func=review)
 
     p = sub.add_parser("bootstrap", help="build six profile drafts from a real chat index")
     p.add_argument("--db", default=str(WORK / "unified_index.db"))

@@ -62,7 +62,10 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
 3. 对 `work/kit_next/` 的“二层回流待确认区”，逐条判断：本人亲历？AI 代做/转述？已讲过？值得升格？不值得就删；
 4. 保留 `[待确认]`，不要用常识补全；本人签字后才可用 `backfill --apply-signed --confirm` 写入正式档案；
 5. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
-6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿。
+6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿；
+7. 复核通过后落回执：`py -3.12 -X utf8 scripts/xh.py review --confirm --kit work/kit`。
+   build 回执与档案旁的 `_evidence/review.json` 初始状态都是 `pending_review`；
+   没跑这一步，`verify` 与 S7 三问盲测会被阻断，并提示先复核，Agent 不能自行代签。
 
 ## 3. 真实全流程（推荐顺序）
 
@@ -156,7 +159,7 @@ py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026
 py -3.12 -X utf8 scripts/xh.py verify --kit work/kit --strict
 ```
 
-看到 `VALIDATE_OK` 才算 6 文件结构合格。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
+看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
 
 ## 4. 快速演示（不访谈、不导出）
 
