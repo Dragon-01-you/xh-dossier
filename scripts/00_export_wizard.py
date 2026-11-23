@@ -93,6 +93,7 @@ def run_wizard(
     print(f"- 引擎商店（{browser}）：{target_url}")
     print(f"- 开源发布页：{EXTENSION_URLS['releases']}")
     print(f"- 工人脚本（AfterChat）：{AFTERCHAT_URL}")
+    print("- 网络退路：商店 / 主页 / GreasyFork 打不开时，引擎走上面「开源发布页」压缩包（--download-release）；场景与备选入口见 docs/02「网络场景退路」。")
     print("\n【第 1 关：安装引擎 ScriptCat 后必开的 5 步】")
     for step in MV3_SWITCH_CHECKLIST:
         print(" ", step)
