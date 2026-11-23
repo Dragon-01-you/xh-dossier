@@ -1,5 +1,6 @@
-param(
+﻿param(
     [string]$Target = "$env:USERPROFILE\XH-Dossier",
+    [string]$Archive = "",
     [switch]$RunDemo,
     [switch]$Force
 )
@@ -14,17 +15,6 @@ if (-not (Test-Path -LiteralPath $Target)) {
 $Target = (Resolve-Path -LiteralPath $Target).Path
 Write-Output "source: $src"
 Write-Output "target: $Target"
-
-if ($src -eq $Target) {
-    Write-Output "INSTALL_SKIP: source and target are the same directory"
-} else {
-    $exclude = @('.git', 'work', 'dist', '.pytest_cache', '__pycache__', '.venv')
-    Get-ChildItem -LiteralPath $src -Force | Where-Object {
-        $_.Name -notin $exclude
-    } | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $Target -Recurse -Force:$Force
-    }
-}
 
 # Python detection: prefer py -3.12, then py -3, then python.
 $pyExe = $null
@@ -41,6 +31,41 @@ foreach ($candidate in @(@('py', '-3.12'), @('py', '-3'), @('python', ''))) {
         }
     } catch { }
 }
+
+if ($Archive) {
+    # 主路径：Expand-Archive（.NET ZipArchive，认 UTF-8 文件名标志）。
+    if (-not (Test-Path -LiteralPath $Archive)) {
+        Write-Output "INSTALL_FAIL: 发布包不存在：$Archive"
+        exit 1
+    }
+    try {
+        Expand-Archive -LiteralPath $Archive -DestinationPath $Target -Force
+        Write-Output "extract: Expand-Archive"
+    } catch {
+        # 退路：Python 标准库 zipfile（同样认 UTF-8 标志）。
+        if (-not $pyExe) {
+            Write-Output "INSTALL_FAIL: Expand-Archive 失败，且未找到 Python 作为退路：$_"
+            exit 1
+        }
+        Write-Output "WARN: Expand-Archive 失败，改用 Python zipfile 解压：$_"
+        & $pyExe @pyArgs -m zipfile -e $Archive $Target
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "INSTALL_FAIL: Python zipfile 解压返回 $LASTEXITCODE"
+            exit $LASTEXITCODE
+        }
+        Write-Output "extract: python zipfile"
+    }
+} elseif ($src -eq $Target) {
+    Write-Output "INSTALL_SKIP: source and target are the same directory"
+} else {
+    $exclude = @('.git', 'work', 'dist', '.pytest_cache', '__pycache__', '.venv')
+    Get-ChildItem -LiteralPath $src -Force | Where-Object {
+        $_.Name -notin $exclude
+    } | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Target -Recurse -Force:$Force
+    }
+}
+
 if (-not $pyExe) {
     Write-Output "INSTALL_FAIL: Python 3.10+ not found. Install Python, then rerun this script."
     exit 1

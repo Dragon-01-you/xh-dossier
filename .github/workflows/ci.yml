@@ -32,3 +32,14 @@ jobs:
 
       - name: Validate 6-file templates
         run: python -X utf8 scripts/03_validate_kit.py --target templates
+
+      - name: Package archive round-trip (zipfile + tar.gz), doctor green
+        run: |
+          python -X utf8 scripts/xh.py package --out dist/rt.zip
+          rm -rf /tmp/rt-zip && mkdir -p /tmp/rt-zip
+          python -m zipfile -e dist/rt.zip /tmp/rt-zip
+          python -X utf8 /tmp/rt-zip/scripts/00_doctor.py --root /tmp/rt-zip
+          tar -czf /tmp/rt.tar.gz -C /tmp/rt-zip .
+          rm -rf /tmp/rt-tgz && mkdir -p /tmp/rt-tgz
+          tar -xzf /tmp/rt.tar.gz -C /tmp/rt-tgz
+          python -X utf8 /tmp/rt-tgz/scripts/00_doctor.py --root /tmp/rt-tgz

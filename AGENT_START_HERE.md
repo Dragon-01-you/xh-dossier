@@ -10,6 +10,8 @@ py -3.12 -X utf8 scripts/xh.py doctor
 
 看到 `DOCTOR_OK` 再往下。`ERROR:` 必须解决；`WARN:` 可以先记录。
 
+> 解压坑（issue #55）：Linux 老 `unzip`（Info-ZIP 6.00）会忽略 zip 的 UTF-8 标志，把中文模板名解成乱码，doctor 会报“文件名编码损坏（不是缺模板）”。这时不要重打包，改用 `python3 -m zipfile -e 发布包.zip 目标目录`，或用 `.tar.gz` 包 `tar -xzf` 重新解压；Windows 用右键“全部解压”或 `python -m zipfile -e`。
+
 ## 1. 初始化工作区
 
 ```powershell
