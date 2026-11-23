@@ -13,6 +13,10 @@ import sqlite3
 from typing import Any
 
 from event_time import detect_event_time
+# Issue #100: the only extensions this stage parses. Every other file (sqlite, zip, image, ...) is counted and listed rather than silently skipped; see docs/03-data-sources.md for the identify -> export -> normalize matrix.
+RECOGNIZED_EXTS = {".json", ".jsonl", ".md", ".txt"}
+
+
 
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
@@ -261,6 +265,8 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
         dedup_skipped = 0
         indexed = 0
         encoding_stats: dict = {"files": 0, "chars": 0, "detail": []}
+        skipped_unrecognized = 0
+        skipped_detail: list[tuple[str, str]] = []
 
         for path in sorted(raw_dir.rglob("*")):
             if not path.is_file():
@@ -273,6 +279,11 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
             elif ext in {".md", ".txt"}:
                 extracted = _extract_from_text(path, encoding_stats)
             else:
+                # Issue #100: non-whitelist carriers are not parsed here; they
+                # must be normalized to a whitelist format upstream (see the
+                # data-sources matrix). Count and list them instead of hiding.
+                skipped_unrecognized += 1
+                skipped_detail.append((path.name, ext or "(no ext)"))
                 continue
 
             for item in extracted:
@@ -324,6 +335,8 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
         "encoding_replaced_files": encoding_stats["files"],
         "encoding_replaced_chars": encoding_stats["chars"],
         "encoding_replaced_detail": encoding_stats["detail"],
+        "skipped_unrecognized_files": skipped_unrecognized,
+        "skipped_unrecognized_detail": skipped_detail,
     }
 
 
@@ -417,6 +430,10 @@ def main() -> int:
         print(f"ENCODING_REPLACED: file={stats['encoding_replaced_files']} chars={stats['encoding_replaced_chars']}")
         print("不要把含非法 UTF-8 的索引当成可信冷库；请将 raw 文件另存为 UTF-8 后重跑 01 清洗。")
         return 2
+    if stats["skipped_unrecognized_files"] > 0:
+        print(f"WARN: {stats['skipped_unrecognized_files']} 个非白名单扩展名文件未解析（归一要求见 docs/03-data-sources.md）：")
+        for fname, ext in stats["skipped_unrecognized_detail"][:10]:
+            print(f"  - {fname} ({ext})")
     print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
     if args.query:
         hits = search_keyword(args.db, args.query)
