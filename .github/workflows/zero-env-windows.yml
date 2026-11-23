@@ -1,0 +1,44 @@
+name: Zero-env Windows smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and demo in a fresh directory
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "xh-zero"
+          .\install.ps1 -Target $target -RunDemo -Force
+
+      - name: Build sample and validate 6 files
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "xh-zero"
+          Push-Location $target
+          python -X utf8 scripts/xh.py build --raw examples/sample_raw --db work/ci.db --kit work/ci_kit --l2 work/ci_l2 --report work/ci_report.md --query 项目 --skip-retrieval
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -X utf8 scripts/xh.py verify --kit work/ci_kit --strict
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+
+      - name: Install dev dependencies and run tests
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "xh-zero"
+          Push-Location $target
+          python -m pip install --upgrade pip -r requirements-dev.txt
+          python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
