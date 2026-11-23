@@ -430,6 +430,21 @@ def verify(args: argparse.Namespace) -> int:
         no_scorecard=bool(getattr(args, "no_scorecard", False))))
 
 
+def blind(args: argparse.Namespace) -> int:
+    """Issue #98: build the S7 three-question blind package (read-only six files)."""
+    kit = pathlib.Path(args.kit).expanduser()
+    blocker = review_block_reason(kit)
+    if blocker:
+        print("BLIND_BLOCKED_REVIEW")
+        print(blocker)
+        return 1
+    cmd = [sys.executable, "-X", "utf8", str(_script("blind_test.py")),
+           "--kit", str(kit), "--out", str(pathlib.Path(args.out).expanduser())]
+    if args.score:
+        cmd += ["--score", str(pathlib.Path(args.score).expanduser())]
+    return _run(cmd)
+
+
 def backfill(args: argparse.Namespace) -> int:
     script = _script("05_deep_backfill.py")
     if not script.is_file():
@@ -560,6 +575,12 @@ def main() -> int:
     p.add_argument("--hops", type=int, default=None, choices=[1, 2])
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=retrieval)
+
+    p = sub.add_parser("blind", help="S7 three-question blind-test package (issue #98)")
+    p.add_argument("--kit", default=str(WORK / "kit"))
+    p.add_argument("--out", default=str(WORK / "blind"))
+    p.add_argument("--score", default=None, help="filled answer sheet to score")
+    p.set_defaults(func=blind)
 
     p = sub.add_parser("backfill", help="run layer-2 deep backfill (if 05 exists)")
     p.add_argument("--profiles", default=None)

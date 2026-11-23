@@ -159,7 +159,8 @@ py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026
 py -3.12 -X utf8 scripts/xh.py verify --kit work/kit --strict
 ```
 
-看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
+看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。
+盲测包由 `py -3.12 -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
 
 ## 4. 快速演示（不访谈、不导出）
 
