@@ -92,6 +92,7 @@
 ### 测试与验收
 - main：`187 passed`；release2：`189 passed`。
 - 真实 6 档案 strict：`VALIDATE_OK`。
+- 验收口径（#97）：`VALIDATE_OK` 只代表结构合格；记“通过”前须对照 `docs/standard-v1.md` 的外部指标与 `docs/scorecard.md` 评分卡，阈值由用户裁定。
 - 全新目录一键安装：`INSTALL_OK` + `DEMO_OK`（`INDEX_OK → FOUR_WAY_OK → VALIDATE_OK`）。
 - `xh.py retrieval` 在 demo 库上真实跑通：`05 backfill` → `06 build` → `07 recall`，exit 0。
 
