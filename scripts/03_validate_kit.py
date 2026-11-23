@@ -209,6 +209,14 @@ RULE_VERB_RE = re.compile(
 PRINCIPLE_PADDING_RE = re.compile(
     r"(先确认目标与验收，再谈执行速度|先保真实与可复现，再谈漂亮表达|先做最小闭环，再扩规模)"
 )
+# Issue #94 advisory: question-looking candidates and pasted third-party material.
+QUESTION_ANY_RE = re.compile(
+    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|还是说|请问|什么区别|什么意思)"
+)
+PASTED_MATERIAL_TOKENS = (
+    "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
+    "书中说", "节选自", "摘自", "引用自", "作为过去", "五十年",
+)
 
 
 def rule_shape(text: str) -> tuple[bool, str]:
@@ -315,6 +323,24 @@ def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
                     f"正反例不像带场景/损失后果的陈述句（{reason}）：请求句、问句、对话指责应过滤",
                 ))
 
+    # Issue #94: advisory scan across identity / principle / rule candidates.
+    for fkey, label in (("01-身份与当前主线.md", "身份/主线"), ("02-核心判断准则.md", "准则"),
+                          ("03-硬规则与表达黑话.md", "规则")):
+        fdoc = find_kit_file(target_dir, fkey)
+        if fdoc is None:
+            continue
+        dlines = fdoc.read_text(encoding="utf-8", errors="replace").splitlines()
+        for lineno, line in enumerate(dlines, start=1):
+            if not line.startswith("- **候选"):
+                continue
+            if QUESTION_ANY_RE.search(line) or QUESTION_END_RE.search(line):
+                findings.append(SemanticFinding(
+                    "SEMANTIC_QUESTION_CANDIDATE", fdoc.name, lineno,
+                    f"{label}候选看起来是提问句，不应作为本人自述；交付前人工复核剔除"))
+            if any(tok in line for tok in PASTED_MATERIAL_TOKENS):
+                findings.append(SemanticFinding(
+                    "SEMANTIC_PASTED_MATERIAL", fdoc.name, lineno,
+                    f"{label}候选疑似粘贴的他人简介/引用材料，不是本人自述；交付前人工复核剔除"))
     return findings
 
 

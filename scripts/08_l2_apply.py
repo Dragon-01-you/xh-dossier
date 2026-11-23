@@ -34,6 +34,12 @@ if str(SCRIPTS_DIR) not in sys.path:
 VALIDATOR = importlib.import_module("03_validate_kit")
 
 EVIDENCE_REL = pathlib.Path("_evidence") / "l2-lines.md"
+# Issue #94: a question to the AI stays out of the pending zone; it is counted
+# as skipped rather than promoted to an unsigned candidate.
+QUESTION_RE = re.compile(
+    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|怎么回事|为何|能否|"
+    r"还是说|你可以看一下|请问|哪些|什么区别|什么意思|[？?])"
+)
 BLOCK_RE = re.compile(
     r"###\s*(?P<cid>L2-\d{4})\s*\[待确认\].*?"
     r"\*\*原文摘录\*\*：>\s*(?P<excerpt>[^\n]+)",
@@ -88,6 +94,7 @@ def apply_unsigned(kit: pathlib.Path, l2_dir: pathlib.Path, out_kit: pathlib.Pat
     # Assign line numbers before writing the evidence digest.
     numbered: dict[str, list[tuple[str, str, int]]] = {}
     all_applied: list[tuple[str, str, int]] = []
+    question_skipped = 0
     lineno = 5  # four header lines, first record at line 5
     for target, blocks in profile_blocks.items():
         real = VALIDATOR.find_kit_file(out_kit, target)
@@ -95,6 +102,9 @@ def apply_unsigned(kit: pathlib.Path, l2_dir: pathlib.Path, out_kit: pathlib.Pat
             continue
         numbered[target] = []
         for cid, excerpt in blocks:
+            if QUESTION_RE.search(excerpt):
+                question_skipped += 1
+                continue
             numbered[target].append((cid, excerpt, lineno))
             all_applied.append((cid, excerpt, lineno))
             lineno += 1
@@ -127,7 +137,7 @@ def apply_unsigned(kit: pathlib.Path, l2_dir: pathlib.Path, out_kit: pathlib.Pat
 
     ok, messages = VALIDATOR.validate_kit(out_kit, strict=True)
     return {"applied": applied, "kit": str(out_kit), "validate_ok": ok,
-            "validate_messages": messages}
+            "validate_messages": messages, "question_skipped": question_skipped}
 
 
 def main() -> int:
@@ -143,8 +153,8 @@ def main() -> int:
         return 2
     for msg in res["validate_messages"]:
         print(msg)
-    print(f"L2_APPLY applied={res['applied']} kit={res['kit']} "
-          f"validate={'OK' if res['validate_ok'] else 'FAILED'}")
+    print(f"L2_APPLY applied={res['applied']} question_skipped={res.get('question_skipped', 0)} "
+          f"kit={res['kit']} validate={'OK' if res['validate_ok'] else 'FAILED'}")
     return 0 if res["validate_ok"] else 1
 
 
