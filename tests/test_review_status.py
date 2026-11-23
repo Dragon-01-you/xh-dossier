@@ -9,6 +9,8 @@ import importlib
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -52,6 +54,29 @@ def test_review_read_only_reports_pending_without_writing(tmp_path: pathlib.Path
     rc = XH.review(argparse.Namespace(kit=str(kit), confirm=False, note=None))
     assert rc == 1  # pending exits non-zero for the read-only status check
     assert not (kit / XH.REVIEW_STATUS_REL).exists()
+
+
+def test_verify_passes_scorecard_flags_after_confirm(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kit = tmp_path / "kit"
+    kit.mkdir()
+    for name in XH.KIT_FILES:
+        (kit / name).write_text("", encoding="utf-8")
+    XH._write_review_status(kit, XH.REVIEW_CONFIRMED)
+    captured: dict[str, object] = {}
+
+    def fake_validate(ns: argparse.Namespace) -> int:
+        captured["ns"] = ns
+        return 0
+
+    monkeypatch.setattr(XH, "validate", fake_validate)
+    rc = XH.verify(argparse.Namespace(
+        kit=str(kit), strict=True, enforce_score=True, no_scorecard=False))
+    assert rc == 0
+    ns = captured["ns"]
+    assert getattr(ns, "enforce_score", False) is True
+    assert getattr(ns, "no_scorecard", False) is False
 
 
 def test_build_sidecar_starts_pending(tmp_path: pathlib.Path) -> None:

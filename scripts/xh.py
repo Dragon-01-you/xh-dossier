@@ -420,7 +420,10 @@ def verify(args: argparse.Namespace) -> int:
         print("VERIFY_BLOCKED_REVIEW")
         print(blocker)
         return 1
-    return validate(argparse.Namespace(kit=str(kit), strict=bool(args.strict)))
+    return validate(argparse.Namespace(
+        kit=str(kit), strict=bool(args.strict),
+        enforce_score=bool(getattr(args, "enforce_score", False)),
+        no_scorecard=bool(getattr(args, "no_scorecard", False))))
 
 
 def backfill(args: argparse.Namespace) -> int:
