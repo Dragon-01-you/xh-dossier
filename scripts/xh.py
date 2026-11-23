@@ -232,7 +232,11 @@ def match(args: argparse.Namespace) -> int:
 def bootstrap(args: argparse.Namespace) -> int:
     db = pathlib.Path(args.db).expanduser()
     out = pathlib.Path(args.out).expanduser()
-    return _run([sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")), "--db", str(db), "--out", str(out)])
+    cmd = [sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")),
+           "--db", str(db), "--out", str(out)]
+    if args.interview:
+        cmd += ["--interview", str(pathlib.Path(args.interview).expanduser())]
+    return _run(cmd)
 
 
 def build(args: argparse.Namespace) -> int:
@@ -242,13 +246,17 @@ def build(args: argparse.Namespace) -> int:
     kit = pathlib.Path(args.kit).expanduser()
     l2 = pathlib.Path(args.l2).expanduser()
     report = pathlib.Path(args.report).expanduser()
+    interview = pathlib.Path(args.interview).expanduser() if args.interview else None
+    bootstrap_cmd = [sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")),
+                      "--db", str(db), "--out", str(kit)]
+    if interview is not None:
+        bootstrap_cmd += ["--interview", str(interview)]
     steps = [
         [sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")),
          "--raw", str(raw), "--db", str(db), "--query", args.query],
         [sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
          "--db", str(db), "--out", str(report)],
-        [sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")),
-         "--db", str(db), "--out", str(kit)],
+        bootstrap_cmd,
     ]
     for step in steps:
         rc = _run(step)
@@ -282,7 +290,8 @@ def build(args: argparse.Namespace) -> int:
                 return rc
     rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
                "--target", str(kit), "--strict"])
-    payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2), report=str(report))
+    payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2),
+                        report=str(report), interview=str(interview) if interview else None)
     path = _write_receipt("build", payload)
     print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
     print("receipt:", path)
@@ -425,6 +434,8 @@ def main() -> int:
     p = sub.add_parser("bootstrap", help="build six profile drafts from a real chat index")
     p.add_argument("--db", default=str(WORK / "unified_index.db"))
     p.add_argument("--out", default=str(WORK / "kit"))
+    p.add_argument("--interview", "--answers", dest="interview", default=None,
+                   help="访谈目录（answers.md + round-N.md）或单个 answers.md")
     p.set_defaults(func=bootstrap)
 
     p = sub.add_parser("build", help="one-command: raw -> index -> 6 drafts -> L2 proposal -> validate")
@@ -434,6 +445,9 @@ def main() -> int:
     p.add_argument("--l2", default=str(WORK / "layer2"))
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
     p.add_argument("--query", default="项目", help="keyword used for the final FTS recall step")
+    p.add_argument("--interview", "--answers", dest="interview", default=None,
+                   help="访谈目录（answers.md + round-N.md）或单个 answers.md；"
+                        "访谈答案作为 A 级基准入稿，raw 回填只作补证")
     p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
     p.add_argument("--apply-unsigned", dest="apply_unsigned", action="store_true", default=True,
                    help="apply L2 candidates as a pending zone in kit_next (default)")

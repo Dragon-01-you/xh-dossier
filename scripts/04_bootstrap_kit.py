@@ -32,9 +32,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 VALIDATOR = importlib.import_module("03_validate_kit")
+INTERVIEW = importlib.import_module("interview_source")
 
 MAX_ITEMS = 8
 EVIDENCE_REL = pathlib.Path("_evidence") / "chat-lines.md"
+INTERVIEW_EVIDENCE_REL = pathlib.Path("_evidence") / "interview-lines.md"
 
 # Strong/weak cues are deliberately literal: this script is a *router*, not an
 # LLM. It must never invent a claim that is not present in the user's text.
@@ -373,9 +375,17 @@ def _quote_line(record: Record) -> str:
     )
 
 
-def _bullet(record: Record, idx: int) -> str:
+def _bullet(record: Record, idx: int, pending_note: str = "") -> str:
     heading = record.display or _first_sentence(record.content)
-    return f"- **候选-{idx:02d}** {heading} ｜ {_quote_line(record)}"
+    tail = f" ｜ {pending_note}" if pending_note else ""
+    return (
+        f"- **候选-{idx:02d}** {heading} ｜ {_quote_line(record)} "
+        f"｜ 来源通道：raw 回填 B 级{tail}"
+    )
+
+
+def _conflict_note(fact: INTERVIEW.InterviewFact) -> str:
+    return f"[待确认] 与访谈「{fact.text}」不一致；以访谈 A 级为准，本条需本人裁定，不得覆盖访谈记录"
 
 
 def _pending(record: Record, question: str) -> str:
@@ -403,8 +413,36 @@ def _build_evidence(records: list[Record], path: pathlib.Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[str, int]]) -> str:
+def _build_interview_evidence(bundle: INTERVIEW.InterviewBundle, path: pathlib.Path) -> None:
+    """Copy sourced interview lines into the kit evidence digest.
+
+    The kit bullet cites the digest line so a reviewer can open the copied
+    line and trace it back to ``answers.md`` / ``round-N.md`` (original file +
+    line kept in the bullet's `来源` field).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# 访谈 A 级证据行（只读）",
+        "",
+        "> 每行一条访谈答案；编号供六份档案「出处」列核对。原文来自 work/interview 的 answers.md / round-N.md。",
+        "",
+    ]
+    for i, fact in enumerate(bundle.facts, start=1):
+        fact.evidence_line = i + 4
+        lines.append(f"L{i:04d} | {fact.source_file}:{fact.source_line} | {fact.slot} | {fact.quote}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[str, int]],
+               bundle: INTERVIEW.InterviewBundle | None = None) -> str:
     source_lines = "\n".join(f"- `{title}`：{count} 条用户原话" for title, count in sources[:8]) or "- （样本不足）"
+    interview_note = ""
+    if bundle and not bundle.is_empty():
+        interview_note = (
+            f"\n- **访谈 A 级**：{len(bundle.facts)} 条本人在 6 轮访谈中确认的答案"
+            f"（来源：{', '.join(bundle.source_files)}），见 `_evidence/interview-lines.md`。"
+            "访谈答案是基准，raw 回填只能补证，不得覆盖。\n"
+        )
     return f"""# AGENTS.md · 机器初稿交接说明
 
 > 来源：`{db_path.name}` 的 {len(records)} 条真实用户消息。生成时间：{_now()}。
@@ -420,9 +458,10 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
 
 ## 二、事实等级（必须遵守）
 
-- **A 级**：有 `原文` + `出处`，而且能在 `_evidence/chat-lines.md` 的对应行找到原句。可以当作“本人说过”。
-- **B 级**：由多条 A 级原话归纳出的主题/主线。只能当“候选归纳”，不能当身份定论。
-- **C 级**：写作 `[待确认]` 的条目。只能向本人提问，不得自行补全。
+- **A 级 · 访谈**：本人在 6 轮访谈中明确确认的答案；带访谈原文与 `answers.md` / `round-N.md` 出处。是基准，其他来源不得覆盖。{interview_note}
+- **A 级 · 原话**：有 `原文` + `出处`，而且能在 `_evidence/chat-lines.md` 的对应行找到原句。可以当作“本人说过”。
+- **B 级 · raw 回填**：由多条原话归纳出的主题/主线。只能当“候选归纳”，不能当身份定论；与访谈 A 级冲突时标 `[待确认]`，由本人裁定。
+- **C 级 · L2 待确认**：写作 `[待确认]` 的二层回流条目。只能向本人提问，不得自行补全。
 
 ## 三、给接手 Agent 的硬规则
 
@@ -442,11 +481,18 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
 """
 
 
-def _index_md(records: list[Record], sources: list[tuple[str, int]]) -> str:
+def _index_md(records: list[Record], sources: list[tuple[str, int]],
+              bundle: INTERVIEW.InterviewBundle | None = None) -> str:
     source_lines = "\n".join(f"- `{title}`：{count} 条" for title, count in sources[:12])
+    interview_line = ""
+    if bundle and not bundle.is_empty():
+        interview_line = (
+            f"\n- 访谈输入：{', '.join(bundle.source_files)}（{len(bundle.facts)} 条 A 级答案，"
+            "优先级高于 raw 回填）"
+        )
     return f"""# 00-总入口索引
 
-> 机器初稿，生成于 {_now()}；数据源 {len(records)} 条用户消息。
+> 机器初稿，生成于 {_now()}；数据源 {len(records)} 条用户消息。{interview_line}
 
 ## 一、六份档案
 
@@ -495,25 +541,50 @@ py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --entity 知
 
 
 def _identity_md(records: list[Record], selected: list[Record], mainline: list[Record],
-                 history: list[Record], sources: list[tuple[str, int]]) -> str:
+                 history: list[Record], sources: list[tuple[str, int]],
+                 bundle: INTERVIEW.InterviewBundle | None = None) -> str:
+    bundle = bundle or INTERVIEW.InterviewBundle()
+    interview_name = bundle.by_slot("name")
+    interview_identity = bundle.by_slot("identity") + bundle.by_slot("time_boundary")
+    interview_mainline = bundle.by_slot("mainline")
     lines = [
         "# 01-身份与当前主线",
         "",
         "> **机器初稿 / B 级**：以下是从用户原话中抽出的身份与方向候选，不是本人签字确认的身份定论。",
+        "> 访谈中本人确认的答案列为 **A 级**，优先级高于 raw 回填；两者不一致时 raw 条目标 `[待确认]`，不覆盖访谈。",
         "",
         "## 一、身份候选（有原话才写）",
         "",
     ]
+    interview_all_identity = interview_name + interview_identity
+    if interview_all_identity:
+        for fact in interview_all_identity:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if selected:
         for i, r in enumerate(selected, 1):
-            lines.append(_bullet(r, i))
-    else:
+            note = ""
+            for fact in interview_identity:
+                if not INTERVIEW.raw_agrees(fact, r.content):
+                    note = _conflict_note(fact)
+                    break
+            lines.append(_bullet(r, i, pending_note=note))
+    elif not interview_all_identity:
         lines.append(_empty_note("身份/自我描述"))
     lines += ["", "## 二、当前主线候选（最多 1 条，待本人确认）", ""]
+    if interview_mainline:
+        for fact in interview_mainline:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if mainline:
         for r in mainline:
-            lines.append(_bullet(r, 1))
-    else:
+            note = ""
+            for fact in interview_mainline:
+                if not INTERVIEW.raw_agrees(fact, r.content):
+                    note = _conflict_note(fact)
+                    break
+            lines.append(_bullet(r, 1, pending_note=note))
+    elif not interview_mainline:
         lines.append("- 需访谈：没有足够原话判断当前主线；请补访谈或更多聊天，不用历史项目凑数。")
     lines += ["", "## 三、历史项目与曾经提到的方向（不是当前主线）", ""]
     if history:
@@ -547,21 +618,34 @@ def _identity_md(records: list[Record], selected: list[Record], mainline: list[R
     return "\n".join(lines)
 
 
-def _principles_md(items: list[Record]) -> str:
+def _principles_md(items: list[Record],
+                   bundle: INTERVIEW.InterviewBundle | None = None) -> str:
+    bundle = bundle or INTERVIEW.InterviewBundle()
+    interview_principles = bundle.by_slot("principle")
     lines = [
         "# 02-核心判断准则",
         "",
         "> **机器初稿 / B 级**：判断句必须来自用户原话并带出处；机器归纳标题不能冒充本人原话。",
+        "> 访谈选定的准则列为 **A 级**；raw 回填只作补证，与 A 级不一致时标 `[待确认]`。",
         "",
         "## 一、有据判断（原话 + 出处）",
         "",
     ]
+    if interview_principles:
+        for fact in interview_principles:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if items:
         for i, r in enumerate(items, 1):
-            lines.append(_bullet(r, i))
-        if len(items) < 3:
-            lines += ["", f"- 原话不足 3 条（现有 {len(items)} 条）；其余判断需访谈补全，不用归纳句填空。"]
-    else:
+            note = ""
+            for fact in interview_principles:
+                if not INTERVIEW.raw_agrees(fact, r.content):
+                    note = _conflict_note(fact)
+                    break
+            lines.append(_bullet(r, i, pending_note=note))
+        if len(items) + len(interview_principles) < 3:
+            lines += ["", f"- 原话不足 3 条（现有 raw {len(items)} 条 + 访谈 {len(interview_principles)} 条）；其余判断需访谈补全，不用归纳句填空。"]
+    elif not interview_principles:
         lines.append("- 需访谈：数据库中没有足够的「判断/取舍」原话；请补访谈或更多聊天，不用推测或归纳填空。")
     lines += [
         "",
@@ -573,19 +657,32 @@ def _principles_md(items: list[Record]) -> str:
     return "\n".join(lines)
 
 
-def _rules_md(items: list[Record]) -> str:
+def _rules_md(items: list[Record],
+              bundle: INTERVIEW.InterviewBundle | None = None) -> str:
+    bundle = bundle or INTERVIEW.InterviewBundle()
+    interview_rules = bundle.by_slot("rule")
     lines = [
         "# 03-硬规则与表达黑话",
         "",
         "> **机器初稿 / B 级**：硬规则只从用户明确说过的原话抽取；没有原话就不编规则。",
+        "> 访谈确认的红线列为 **A 级**；raw 回填只作补证，与 A 级不一致时标 `[待确认]`。",
         "",
         "## 一、硬规则候选",
         "",
     ]
+    if interview_rules:
+        for fact in interview_rules:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if items:
         for i, r in enumerate(items, 1):
-            lines.append(_bullet(r, i))
-    else:
+            note = ""
+            for fact in interview_rules:
+                if not INTERVIEW.raw_agrees(fact, r.content):
+                    note = _conflict_note(fact)
+                    break
+            lines.append(_bullet(r, i, pending_note=note))
+    elif not interview_rules:
         lines.append(_empty_note("硬规则/禁止"))
     lines += [
         "",
@@ -604,25 +701,38 @@ def _rules_md(items: list[Record]) -> str:
     return "\n".join(lines)
 
 
-def _cases_md(negatives: list[Record], positives: list[Record]) -> str:
+def _cases_md(negatives: list[Record], positives: list[Record],
+              bundle: INTERVIEW.InterviewBundle | None = None) -> str:
+    bundle = bundle or INTERVIEW.InterviewBundle()
+    interview_pos = bundle.by_slot("positive")
+    interview_neg = bundle.by_slot("negative")
     lines = [
         "# 04-反面案例清单",
         "",
         "> **机器初稿**：正例/反例保留原话与出处；标签是机器加的，事实以原话为准。每条必须是具体场景 + 损失/后果的陈述句。",
+        "> 访谈确认的正例/反例列为 **A 级**；raw 回填只作补证。",
         "",
         "## 一、正例标本",
         "",
     ]
+    if interview_pos:
+        for fact in interview_pos:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if positives:
         for i, r in enumerate(positives, 1):
             lines.append(_bullet(r, i))
-    else:
+    elif not interview_pos:
         lines.append(_empty_note("有效做法/成功"))
     lines += ["", "## 二、反例标本", ""]
+    if interview_neg:
+        for fact in interview_neg:
+            lines.append(fact.evidence_bullet(fact.evidence_line))
+        lines.append("")
     if negatives:
         for i, r in enumerate(negatives, 1):
             lines.append(_bullet(r, i))
-    else:
+    elif not interview_neg:
         lines.append(_empty_note("踩坑/返工"))
     lines += [
         "",
@@ -636,9 +746,11 @@ def _cases_md(negatives: list[Record], positives: list[Record]) -> str:
     return "\n".join(lines)
 
 
-def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]:
+def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
+              interview: pathlib.Path | str | None = None) -> dict[str, object]:
     if not db_path.is_file():
         raise FileNotFoundError(f"DB_NOT_FOUND: {db_path}")
+    bundle = INTERVIEW.load_interview(interview)
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     try:
@@ -664,7 +776,7 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
                 source_file=str(row.get("source_file") or ""),
             ))
 
-    if len(records) < 3:
+    if len(records) < 3 and bundle.is_empty():
         raise ValueError(f"NOT_ENOUGH_USER_RECORDS: only {len(records)} usable user messages")
 
     # "Messy chat" contains personal chats, pasted prompts and old projects.
@@ -676,6 +788,8 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
 
     out_dir.mkdir(parents=True, exist_ok=True)
     _build_evidence(records, out_dir / EVIDENCE_REL)
+    if not bundle.is_empty():
+        _build_interview_evidence(bundle, out_dir / INTERVIEW_EVIDENCE_REL)
 
     used: set[str] = set()
     identity_pool = [r for r in records if SELF_RE.search(r.content[:160])]
@@ -698,12 +812,12 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
     top_sources_list = top_sources(records)
 
     files = {
-        "AGENTS.md": _agent_md(db_path, records, top_sources_list),
-        "00-总入口索引.md": _index_md(records, top_sources_list),
-        "01-身份与当前主线.md": _identity_md(records, identity, mainline, history, top_sources_list),
-        "02-核心判断准则.md": _principles_md(principles),
-        "03-硬规则与表达黑话.md": _rules_md(rules),
-        "04-反面案例清单.md": _cases_md(negatives, positives),
+        "AGENTS.md": _agent_md(db_path, records, top_sources_list, bundle),
+        "00-总入口索引.md": _index_md(records, top_sources_list, bundle),
+        "01-身份与当前主线.md": _identity_md(records, identity, mainline, history, top_sources_list, bundle),
+        "02-核心判断准则.md": _principles_md(principles, bundle),
+        "03-硬规则与表达黑话.md": _rules_md(rules, bundle),
+        "04-反面案例清单.md": _cases_md(negatives, positives, bundle),
     }
     for name, body in files.items():
         (out_dir / name).write_text(body.rstrip() + "\n", encoding="utf-8")
@@ -728,10 +842,14 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
             "history": len(history),
             "principles": len(principles), "rules": len(rules),
             "negative": len(negatives), "positive": len(positives),
+            "interview": len(bundle.facts),
         },
+        "interview_facts": len(bundle.facts),
+        "interview_sources": bundle.source_files,
         "validate_ok": ok,
         "validate_messages": messages,
         "evidence": str(out_dir / EVIDENCE_REL),
+        "interview_evidence": str(out_dir / INTERVIEW_EVIDENCE_REL) if not bundle.is_empty() else None,
         "kit": str(out_dir),
     }
 
@@ -754,13 +872,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Bootstrap six profile drafts from a real chat index")
     ap.add_argument("--db", required=True, type=pathlib.Path)
     ap.add_argument("--out", default=pathlib.Path("work/kit"), type=pathlib.Path)
+    ap.add_argument("--interview", "--answers", dest="interview", default=None,
+                    type=pathlib.Path,
+                    help="访谈目录（含 answers.md 与 round-N.md）或单个 answers.md；"
+                         "访谈答案作为 A 级基准入稿，raw 回填只作补证")
     args = ap.parse_args()
     try:
-        res = build_kit(args.db, args.out)
+        res = build_kit(args.db, args.out, interview=args.interview)
     except (FileNotFoundError, ValueError, sqlite3.Error) as exc:
         print(f"BOOTSTRAP_FAIL: {exc}")
         return 2
     print("BOOTSTRAP_OK " + " ".join(f"{k}={v}" for k, v in res["sections"].items()))
+    if res["interview_facts"]:
+        print(f"INTERVIEW_OK facts={res['interview_facts']} sources={','.join(res['interview_sources'])}")
     print(f"records={res['records']} evidence={res['evidence']}")
     if res["validate_ok"]:
         print("VALIDATE_OK")
