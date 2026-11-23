@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -98,11 +99,41 @@ def check_workdir(root: pathlib.Path) -> None:
     print(f"[OK] 工作目录可写：{root}")
 
 
+# Issue #56: garbled Chinese filenames after a bad unzip look like "missing
+# templates" to a naive check. Match replacement char, Cyrillic and box-drawing
+# ranges that Info-ZIP 6.00 produces when it ignores the UTF-8 zip flag.
+_MOJIBAKE_RE = re.compile(r"[�Ѐ-ӿ─-╿]")
+
+
+def _detect_mojibake_templates(root: pathlib.Path) -> list[str]:
+    tdir = root / "templates"
+    if not tdir.is_dir():
+        return []
+    garbled: list[str] = []
+    for entry in sorted(tdir.iterdir()):
+        if entry.is_file() and re.match(r"^\d{2}-", entry.name) and _MOJIBAKE_RE.search(entry.name):
+            garbled.append(entry.name)
+    return garbled
+
+
 def check_files(root: pathlib.Path) -> None:
-    missing = [
-        rel for rel in REQUIRED_SCRIPTS + REQUIRED_TEMPLATES
-        if not (root / rel).is_file()
-    ]
+    missing_scripts = [rel for rel in REQUIRED_SCRIPTS if not (root / rel).is_file()]
+    missing_templates = [rel for rel in REQUIRED_TEMPLATES if not (root / rel).is_file()]
+
+    if missing_templates:
+        garbled = _detect_mojibake_templates(root)
+        if garbled:
+            raise DoctorError(
+                "检测到模板文件名乱码（不是真缺文件）：解压方式把中文文件名解坏了。\n"
+                "  人话：模板其实在包里，但文件名变成了乱码，程序按原名找不到。\n"
+                "  退路（任选其一）：\n"
+                "  · Linux：python -m zipfile -e xh-dossier.zip repo"
+                "（或 unzip -O UTF-8 xh-dossier.zip -d repo）\n"
+                "  · Windows：用资源管理器右键解压，或用 7-Zip 解压\n"
+                f"  乱码文件名示例：{garbled[0]}"
+            )
+
+    missing = missing_scripts + missing_templates
     if missing:
         preview = "、".join(missing[:5])
         if len(missing) > 5:

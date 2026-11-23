@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -111,6 +112,19 @@ def doctor(args: argparse.Namespace) -> int:
         if not templates[name]:
             errors.append(f"missing template {name}")
 
+    if not all(templates.values()) and TEMPLATES.is_dir():
+        garbled = [
+            p.name for p in TEMPLATES.iterdir()
+            if p.is_file() and re.match(r"^\d{2}-", p.name)
+            and re.search(r"[�Ѐ-ӿ─-╿]", p.name)
+        ]
+        if garbled:
+            errors.append(
+                "template filenames look garbled (encoding broken on unzip), not truly missing: "
+                "use `python -m zipfile -e xh-dossier.zip repo` or `unzip -O UTF-8 xh-dossier.zip -d repo`; "
+                f"sample: {garbled[0]}"
+            )
+
     sample_count = 0
     if SAMPLE_RAW.is_dir():
         sample_count = len([p for p in SAMPLE_RAW.iterdir() if p.is_file()])
@@ -175,12 +189,16 @@ def init(args: argparse.Namespace) -> int:
             dst = kit / canonical
             shutil.copyfile(src, dst)
             copied.append(canonical)
-    payload = _receipt("init", True, work=str(WORK), kit=str(kit), copied=copied)
+    payload = _receipt("init", True, work=str(WORK), kit=str(kit), copied=copied,
+                       empty_template_note=True)
     path = _write_receipt("init", payload)
     print("INIT_OK")
     print("work:", WORK)
     print("kit:", kit)
     print("copied:", ", ".join(copied) if copied else "(already populated)")
+    print("说明：work/kit 现在是空白模板，里面的 <...> 还没填。")
+    print("这时直接跑 validate --strict 会报占位符，这不是安装失败。")
+    print("下一步：把聊天记录放进 work/raw 后跑 build；或先做 6 轮访谈，再校验。")
     print("receipt:", path)
     return 0
 

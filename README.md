@@ -70,6 +70,24 @@ python -X utf8 scripts/99_smoke.py        # 输出 SMOKE_OK 即流水线可用�
 
 `00_doctor.py` 会**真实验证** Python ≥ 3.11、SQLite FTS5 + trigram 建表/插入/查询、工作目录可写、必需脚本与模板齐全；任一项不满足会给人话提示并以 exit 2 结束，不会把堆栈丢给你。可用 `--root 仓库目录` 指定仓库位置（省略时默认脚本所在仓库根目录）。
 
+### 3.0.1 解压注意：Linux 旧版 `unzip` 可能把中文文件名解乱码
+
+发布包里的模板与档案是中文文件名。Windows 资源管理器解压、Python `zipfile`、`unzip -O UTF-8` 都正常；但 Linux 上 Info-ZIP `unzip 6.00`（2009）会忽略 zip 的 UTF-8 标志，普通 `unzip` 后文件名可能变成 `00-цА╗….md`。这时 doctor 会明确报“文件名乱码（不是真缺文件）”，并给出退路命令，不会再误报“缺少模板”。
+
+Linux 一条可复制退路（任选其一）：
+
+```bash
+python -m zipfile -e xh-dossier.zip repo
+# 或
+unzip -O UTF-8 xh-dossier.zip -d repo
+```
+
+Windows：直接用资源管理器右键解压，或用 7-Zip。
+
+### 3.0.2 `init` 之后 `work/kit` 是空白模板，`--strict` 报错属正常
+
+`init` 只会把 6 份空白模板复制到 `work/kit/`，里面的 `<...>` 占位符还没填。这时直接跑 `validate --strict` 会报占位符，**这不是安装失败**。下一步：把聊天记录放进 `work/raw/` 后跑 `build`，或先完成 6 轮访谈，再做严格校验。
+
 `99_smoke.py` 会在系统临时目录跑通 `01 → 02 → 03` 最小样例，不污染仓库 `work/`，输出 `SMOKE_OK` 即表示清洗、匹配、校验三段流水线都可用。
 
 ### 3.1 三分钟现场演示
