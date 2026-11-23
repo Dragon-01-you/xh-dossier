@@ -175,12 +175,16 @@ def init(args: argparse.Namespace) -> int:
             dst = kit / canonical
             shutil.copyfile(src, dst)
             copied.append(canonical)
-    payload = _receipt("init", True, work=str(WORK), kit=str(kit), copied=copied)
+    payload = _receipt("init", True, work=str(WORK), kit=str(kit), copied=copied,
+                       empty_template_note=True)
     path = _write_receipt("init", payload)
     print("INIT_OK")
     print("work:", WORK)
     print("kit:", kit)
     print("copied:", ", ".join(copied) if copied else "(already populated)")
+    print("说明：work/kit 现在是空白模板，里面的 <...> 还没填。")
+    print("这时直接跑 validate --strict 会报占位符，这不是安装失败。")
+    print("下一步：把聊天记录放进 work/raw 后跑 build；或先做 6 轮访谈，再校验。")
     print("receipt:", path)
     return 0
 

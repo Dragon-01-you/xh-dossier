@@ -23,6 +23,8 @@ py -3.12 -X utf8 scripts/xh.py init
 - `kit/`：6 份档案草稿
 - `reports/`、`evidence/`
 
+> **注意（不是安装失败）**：`init` 之后 `work/kit/` 是空白模板，里面的 `<...>` 占位符还没填。这时直接 `validate --strict` 会报占位符，属正常现象。下一步：把聊天记录放进 `work/raw/` 跑 `build`，或先做 S1 访谈，再校验。
+
 ## 2. 只有聊天记录，先出一版 6 份初稿（推荐）
 
 如果手上已经有导出的 `work/raw/`，一条命令走完：

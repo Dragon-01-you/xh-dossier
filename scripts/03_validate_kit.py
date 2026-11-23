@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import collections
 import pathlib
 import re
 import unicodedata
@@ -162,6 +163,159 @@ _ABS_REF_RE = re.compile(r"^(?:[A-Za-z]:|[\\/])")
 UNCERTAIN_SEMANTIC_RE = re.compile(
     r"(记不清|记不得|记不住|记混|待核实|待人工核实|未核实|说不准|拿不准|没印象|想不起来|可能记错|可能记混|我不确定|我拿不准)"
 )
+
+
+# --- Issue #56 semantic predicates (shared by generator 04 and this audit) ---
+# A durable rule must be a standing self-constraint ("遇到 X → 必须/绝不 Y"),
+# not a one-turn task instruction, a technical research excerpt, or a line spoken
+# at the assistant during a chat.
+
+# License names, rendering engines, font names, design tokens: technical excerpts.
+TECH_EXCERPT_RE = re.compile(
+    r"(OFL|BSD-?3?|MIT\b|Apache-?2?\.?0?|ISC\b|GPL|WeasyPrint|Typst|Observable Plot|"
+    r"Charter|YuMincho|思源宋|仓耳今楷|渲染器|排版系统|内嵌\s*SVG|SVG\s*图表|"
+    r"#[0-9A-Fa-f]{6}|设计\s*token|画布色|强调色|行距|@page|HTML/CSS→PDF|CJK\s*规则)"
+)
+# Single-turn deliverable / MVP acceptance conditions, not a standing rule.
+SINGLE_TASK_RE = re.compile(
+    r"(MVP\s*阶段|阶段只需实现|无限次读取|无限次调用|无限调用|单独做生图素材|"
+    r"\d+\s*(个)?(视图|资产|素材|模板)|三视图|生图素材|这\s*\d+\s*个视图|"
+    r"MCP 还是 Skill|无论形式是 MCP)"
+)
+# A sentence addressed to the assistant in this turn ("你…"), not a durable view.
+DIALOGUE_ADDRESSED_RE = re.compile(
+    r"(我说叫你|我说了|我又没叫你|我要你|不然我要你|你安排完|你最后|是你的提示词|"
+    r"你帮我|你可以看一下|你看一下|你去|你给我|你直接|你先把|你先给|你按照|"
+    r"你能不能|你深度|你帮我看看|你就是要|你不能|你不要|你别|你切记|切记哈)"
+)
+# A standing rule is not a one-off wish / taste statement ("我要的是顶尖设计…").
+RULE_WISH_RE = re.compile(r"^(?:我要的是|我想要的是)")
+# A request / question aimed at the assistant, not a declarative specimen.
+REQUEST_CASE_RE = re.compile(
+    r"(我要你|不然我要你|怎么搜|你帮我|请你|请帮我|告诉我|我想问|我想知道|帮我看看)"
+)
+QUESTION_END_RE = re.compile(r"[？?]\s*$")
+# Outcome / experience cue required for a positive or negative specimen case.
+CASE_OUTCOME_RE = re.compile(
+    r"(跑通|踩坑|返工|失败|浪费|白做|没完成|卡住|不行|完成|解决|有效|好用|满意|"
+    r"喜欢|进步|收获|值得|落地|报错|崩|放弃|没听懂|没达到|搞错|学到|提升)"
+)
+# "能不能 / 可不可以 / 怎不能" contain 不能 but are questions, not prohibitions.
+RULE_VERB_RE = re.compile(
+    r"(必须|禁止|不要|不许|绝不|记住|铁律|红线|规则|底线|(?<![怎可能])不能)"
+)
+
+# Hard-coded machine padding that must never stand in for sourced principles.
+PRINCIPLE_PADDING_RE = re.compile(
+    r"(先确认目标与验收，再谈执行速度|先保真实与可复现，再谈漂亮表达|先做最小闭环，再扩规模)"
+)
+
+
+def rule_shape(text: str) -> tuple[bool, str]:
+    """Return (is_durable_rule, reject_reason) for a candidate rule sentence."""
+    if not RULE_VERB_RE.search(text):
+        return False, "no-rule-verb"
+    if TECH_EXCERPT_RE.search(text):
+        return False, "technical-excerpt"
+    if SINGLE_TASK_RE.search(text):
+        return False, "single-task-instruction"
+    if DIALOGUE_ADDRESSED_RE.search(text):
+        return False, "dialogue-addressed"
+    if RULE_WISH_RE.search(text):
+        return False, "wish-preference"
+    return True, ""
+
+
+def case_shape(text: str) -> tuple[bool, str]:
+    """Return (is_declarative_case, reject_reason) for a positive/negative specimen."""
+    if QUESTION_END_RE.search(text):
+        return False, "question"
+    if REQUEST_CASE_RE.search(text):
+        return False, "request"
+    if DIALOGUE_ADDRESSED_RE.search(text):
+        return False, "dialogue-addressed"
+    if not CASE_OUTCOME_RE.search(text):
+        return False, "no-outcome-cue"
+    return True, ""
+
+
+SemanticFinding = collections.namedtuple(
+    "SemanticFinding", ["code", "file", "line", "message"]
+)
+
+
+def _section_lines(lines: list[str], heading_keyword: str) -> list[tuple[int, str]]:
+    """Return (line_no, text) bullets inside the first section whose heading matches."""
+    in_section = False
+    out: list[tuple[int, str]] = []
+    for lineno, line in enumerate(lines, start=1):
+        if line.startswith("## "):
+            in_section = heading_keyword in line
+            continue
+        if in_section and line.startswith("- **候选"):
+            out.append((lineno, line))
+    return out
+
+
+def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
+    """Read-only semantic audit: structure can pass while semantics are empty/weak.
+
+    Findings are advisory by design (P0-spec P0-B): they never flip the structural
+    ``passed`` flag, but they are printed explicitly so ``VALIDATE_OK`` cannot
+    hide an empty or padded dossier.
+    """
+    findings: list[SemanticFinding] = []
+
+    f01 = find_kit_file(target_dir, "01-身份与当前主线.md")
+    if f01 is not None:
+        lines = f01.read_text(encoding="utf-8", errors="replace").splitlines()
+        mainline = _section_lines(lines, "当前主线候选")
+        for lineno, _line in mainline[1:]:
+            findings.append(SemanticFinding(
+                "SEMANTIC_MAINLINE_MULTIPLE", f01.name, lineno,
+                "当前主线候选超过 1 条；其余方向应进入独立「历史项目」区，会话标题不得冒充主线",
+            ))
+
+    f02 = find_kit_file(target_dir, "02-核心判断准则.md")
+    if f02 is not None:
+        lines = f02.read_text(encoding="utf-8", errors="replace").splitlines()
+        sourced = [ln for ln, l in enumerate(lines, 1) if l.startswith("- **候选") and "原文" in l]
+        for lineno, line in enumerate(lines, 1):
+            if PRINCIPLE_PADDING_RE.search(line):
+                findings.append(SemanticFinding(
+                    "SEMANTIC_PRINCIPLE_PADDING", f02.name, lineno,
+                    "02 用机器归纳句充数；没有本人原话时应显式写「需访谈」，不拿归纳句填空",
+                ))
+        has_honest_note = any(("需访谈" in l or "样本不足" in l) for l in lines)
+        if not sourced and not has_honest_note:
+            findings.append(SemanticFinding(
+                "SEMANTIC_PRINCIPLE_EMPTY", f02.name, 1,
+                "02 既无带原文/出处的判断句，也没有「需访谈」说明",
+            ))
+
+    f03 = find_kit_file(target_dir, "03-硬规则与表达黑话.md")
+    if f03 is not None:
+        lines = f03.read_text(encoding="utf-8", errors="replace").splitlines()
+        for lineno, line in _section_lines(lines, "硬规则"):
+            ok, reason = rule_shape(line)
+            if not ok:
+                findings.append(SemanticFinding(
+                    "SEMANTIC_RULE_NONRULE", f03.name, lineno,
+                    f"规则候选不像持久硬规则（{reason}）：技术摘录 / 单次任务指令 / 对话句应过滤",
+                ))
+
+    f04 = find_kit_file(target_dir, "04-反面案例清单.md")
+    if f04 is not None:
+        lines = f04.read_text(encoding="utf-8", errors="replace").splitlines()
+        for lineno, line in _section_lines(lines, "标本"):
+            ok, reason = case_shape(line)
+            if not ok:
+                findings.append(SemanticFinding(
+                    "SEMANTIC_CASE_REQUEST", f04.name, lineno,
+                    f"正反例不像带场景/损失后果的陈述句（{reason}）：请求句、问句、对话指责应过滤",
+                ))
+
+    return findings
 
 
 def _scan_pending_markers(text: str) -> tuple[int, list[int], set[int], list[int]]:
@@ -381,6 +535,21 @@ def validate_kit(
         diagnostics.append(
             f"INFO: {compliant_total} compliant '[待确认]' marker(s) pending backfill confirmation."
         )
+
+    # Issue #56: advisory semantic channel. Structural pass/fail stays untouched;
+    # empty/padded sections are called out explicitly instead of hidden by VALIDATE_OK.
+    semantic = audit_semantics(target_dir)
+    for finding in semantic:
+        diagnostics.append(
+            f"SEMANTIC: [{finding.code}] {finding.file}:{finding.line} {finding.message}"
+        )
+    if semantic:
+        diagnostics.append(
+            f"SEMANTIC_REVIEW: {len(semantic)} 条语义提示；结构合格 ≠ 语义合格，"
+            "交付前必须处理或显式标「需访谈」。"
+        )
+    else:
+        diagnostics.append("SEMANTIC_OK: 六条语义抽查项通过。")
 
     return passed, diagnostics
 

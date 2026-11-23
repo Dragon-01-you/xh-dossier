@@ -295,6 +295,8 @@ def candidate_sentence(text: str, kind: str) -> str:
                 continue
             if "我觉得" in part:
                 continue
+            if VALIDATOR.DIALOGUE_ADDRESSED_RE.search(part):
+                continue
             s = score(part, MAINLINE_CUES)
         elif kind == "principle":
             if "你可以" in part or "你看" in part or "我们这里可以" in part:
@@ -311,17 +313,28 @@ def candidate_sentence(text: str, kind: str) -> str:
                 continue
             if not re.search(r"(必须|禁止|不要|不能|不许|记住|铁律|红线|规则|底线|绝不)", part):
                 continue
+            # Issue #56: a durable rule survives the rule-shape audit; technical
+            # excerpts, one-turn task instructions and dialogue lines are dropped.
+            rule_ok, _reason = VALIDATOR.rule_shape(part)
+            if not rule_ok:
+                continue
             s = score(part, RULE_CUES)
         elif kind == "negative":
             if len(part) < 24:
                 continue
             if not EXPERIENCE_RE.search(part):
                 continue
+            case_ok, _reason = VALIDATOR.case_shape(part)
+            if not case_ok:
+                continue
             s = score(part, NEGATIVE_CUES)
         elif kind == "positive":
             if not EXPERIENCE_RE.search(part):
                 continue
             if any(cue in part for cue in NEGATIVE_CUES):
+                continue
+            case_ok, _reason = VALIDATOR.case_shape(part)
+            if not case_ok:
                 continue
             s = score(part, POSITIVE_CUES)
         else:
@@ -482,11 +495,11 @@ py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --entity 知
 
 
 def _identity_md(records: list[Record], selected: list[Record], mainline: list[Record],
-                 sources: list[tuple[str, int]]) -> str:
+                 history: list[Record], sources: list[tuple[str, int]]) -> str:
     lines = [
         "# 01-身份与当前主线",
         "",
-        "> **机器初稿 / B 级**：以下是从用户原话中抽出的身份与主线候选，不是本人签字确认的身份定论。",
+        "> **机器初稿 / B 级**：以下是从用户原话中抽出的身份与方向候选，不是本人签字确认的身份定论。",
         "",
         "## 一、身份候选（有原话才写）",
         "",
@@ -496,19 +509,25 @@ def _identity_md(records: list[Record], selected: list[Record], mainline: list[R
             lines.append(_bullet(r, i))
     else:
         lines.append(_empty_note("身份/自我描述"))
-    lines += ["", "## 二、当前主线候选", ""]
+    lines += ["", "## 二、当前主线候选（最多 1 条，待本人确认）", ""]
     if mainline:
-        for i, r in enumerate(mainline, 1):
+        for r in mainline:
+            lines.append(_bullet(r, 1))
+    else:
+        lines.append("- 需访谈：没有足够原话判断当前主线；请补访谈或更多聊天，不用历史项目凑数。")
+    lines += ["", "## 三、历史项目与曾经提到的方向（不是当前主线）", ""]
+    if history:
+        for i, r in enumerate(history, 1):
             lines.append(_bullet(r, i))
     else:
-        lines.append(_empty_note("项目/方向"))
-    lines += ["", "## 三、从会话标题看到的投入方向", ""]
+        lines.append("- 暂无除当前主线外的其他方向候选。")
+    lines += ["", "## 四、会话标题清单（仅用于定位原文，不构成主线判断）", ""]
     if sources:
         for title, count in sources[:10]:
-            lines.append(f"- `{title}`：{count} 条用户原话；是否为当前主线，需本人确认。")
+            lines.append(f"- `{title}`：{count} 条用户原话；标题只帮助定位，不代表这是当前主线。")
     else:
-        lines.append("- 会话标题不足，无法判断投入方向。")
-    lines += ["", "## 四、需要本人确认的边界", ""]
+        lines.append("- 会话标题不足，无法列出投入方向。")
+    lines += ["", "## 五、需要本人确认的边界", ""]
     anchors = (selected + mainline)[:3]
     if anchors:
         for r in anchors:
@@ -518,7 +537,7 @@ def _identity_md(records: list[Record], selected: list[Record], mainline: list[R
         lines.append("- 数据库里没有足够原话，无法生成待确认问题；先补访谈。")
     lines += [
         "",
-        "## 五、使用边界",
+        "## 六、使用边界",
         "",
         "- 本文件只回答“本人说过什么”，不回答“本人一定是什么样的人”。",
         "- 引用时保留 `原文` 与 `出处`；不要把候选归纳改写成绝对身份。",
@@ -532,24 +551,23 @@ def _principles_md(items: list[Record]) -> str:
     lines = [
         "# 02-核心判断准则",
         "",
-        "> **机器初稿 / B 级**：以下判断句来自用户原话；归纳标题是机器加的，引用时必须带原句与出处。",
+        "> **机器初稿 / B 级**：判断句必须来自用户原话并带出处；机器归纳标题不能冒充本人原话。",
         "",
-        "## 一、先验证再下结论",
+        "## 一、有据判断（原话 + 出处）",
         "",
     ]
     if items:
         for i, r in enumerate(items, 1):
             lines.append(_bullet(r, i))
+        if len(items) < 3:
+            lines += ["", f"- 原话不足 3 条（现有 {len(items)} 条）；其余判断需访谈补全，不用归纳句填空。"]
     else:
-        lines.append(_empty_note("判断/取舍"))
+        lines.append("- 需访谈：数据库中没有足够的「判断/取舍」原话；请补访谈或更多聊天，不用推测或归纳填空。")
     lines += [
         "",
-        "## 二、取舍顺序（候选）",
+        "## 二、待补访谈",
         "",
-        "- 先确认目标与验收，再谈执行速度。",
-        "- 先保真实与可复现，再谈漂亮表达。",
-        "- 先做最小闭环，再扩规模。",
-        "- 以上三条是归纳，不是本人原话；如与原话冲突，以原话为准。",
+        "- 本文件不写机器归纳出来的取舍顺序；归纳内容只能在本人确认原话后升格。",
         "",
     ]
     return "\n".join(lines)
@@ -590,7 +608,7 @@ def _cases_md(negatives: list[Record], positives: list[Record]) -> str:
     lines = [
         "# 04-反面案例清单",
         "",
-        "> **机器初稿**：正例/反例都保留原话与出处；标签是机器加的，事实以原话为准。",
+        "> **机器初稿**：正例/反例保留原话与出处；标签是机器加的，事实以原话为准。每条必须是具体场景 + 损失/后果的陈述句。",
         "",
         "## 一、正例标本",
         "",
@@ -608,11 +626,11 @@ def _cases_md(negatives: list[Record], positives: list[Record]) -> str:
         lines.append(_empty_note("踩坑/返工"))
     lines += [
         "",
-        "## 三、从标本里提炼的避坑句（候选）",
+        "## 三、从标本里提炼的避坑句（机器归纳，非本人原话）",
         "",
         "- 先确认原文与验收，再动手；避免把“看起来完成”当成“真实跑通”。",
         "- 时间、出处、身份三类事实，缺一条就降级为待确认。",
-        "- 以上为归纳句；若与正反例原话冲突，以原话为准。",
+        "- 以上为归纳句；若与正反例原话冲突，以原话为准，且不得升格为本人准则。",
         "",
     ]
     return "\n".join(lines)
@@ -661,9 +679,12 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
 
     used: set[str] = set()
     identity_pool = [r for r in records if SELF_RE.search(r.content[:160])]
-    identity = _select(identity_pool, IDENTITY_CUES, used, kind="identity")
+    identity = _select(identity_pool, IDENTITY_CUES, used, limit=3, kind="identity")
     mainline_pool = [r for r in records if SELF_RE.search(r.content) or score(r.content, MAINLINE_CUES) >= 2]
-    mainline = _select(mainline_pool, MAINLINE_CUES, used, kind="mainline")
+    mainline_raw = _select(mainline_pool, MAINLINE_CUES, used, limit=4, kind="mainline")
+    # Issue #56: at most one current mainline; everything else moves to a history zone.
+    mainline = mainline_raw[:1]
+    history = mainline_raw[1:]
     principles = _select(records, PRINCIPLE_CUES, used, kind="principle")
     rules = _select(records, RULE_CUES, used, kind="rule")
     negatives = _select(records, NEGATIVE_CUES, used, kind="negative")
@@ -679,7 +700,7 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
     files = {
         "AGENTS.md": _agent_md(db_path, records, top_sources_list),
         "00-总入口索引.md": _index_md(records, top_sources_list),
-        "01-身份与当前主线.md": _identity_md(records, identity, mainline, top_sources_list),
+        "01-身份与当前主线.md": _identity_md(records, identity, mainline, history, top_sources_list),
         "02-核心判断准则.md": _principles_md(principles),
         "03-硬规则与表达黑话.md": _rules_md(rules),
         "04-反面案例清单.md": _cases_md(negatives, positives),
@@ -704,6 +725,7 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path) -> dict[str, object]
         "records": len(records),
         "sections": {
             "identity": len(identity), "mainline": len(mainline),
+            "history": len(history),
             "principles": len(principles), "rules": len(rules),
             "negative": len(negatives), "positive": len(positives),
         },
