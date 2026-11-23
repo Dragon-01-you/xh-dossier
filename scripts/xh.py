@@ -384,6 +384,10 @@ def validate(args: argparse.Namespace) -> int:
     cmd = [sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")), "--target", str(kit)]
     if args.strict:
         cmd.append("--strict")
+    if args.enforce_score:
+        cmd.append("--enforce-score")
+    if args.no_scorecard:
+        cmd.append("--no-scorecard")
     return _run(cmd)
 
 
@@ -500,6 +504,9 @@ def main() -> int:
     p = sub.add_parser("validate", help="validate a 6-file kit")
     p.add_argument("--kit", default=str(WORK / "kit"))
     p.add_argument("--strict", action="store_true")
+    p.add_argument("--enforce-score", action="store_true",
+                   help="fail when the issue #96 scorecard misses a threshold")
+    p.add_argument("--no-scorecard", action="store_true", help="skip the scorecard")
     p.set_defaults(func=validate)
 
     p = sub.add_parser("verify", help="check 6 files exist, review status, and validate")
