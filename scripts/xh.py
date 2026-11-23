@@ -387,6 +387,8 @@ def retrieval(args: argparse.Namespace) -> int:
         cmd += ["--entity", args.entity]
     if args.hops:
         cmd += ["--hops", str(args.hops)]
+    if args.role and args.role != "all":
+        cmd += ["--role", args.role]
     return _run(cmd)
 
 
@@ -596,6 +598,8 @@ def main() -> int:
     p.add_argument("--entity", default=None)
     p.add_argument("--hops", type=int, default=None, choices=[1, 2])
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--role", choices=["user", "assistant", "all"], default="all",
+                   help="Filter keyword recall by role; default lists user first (#95).")
     p.set_defaults(func=retrieval)
 
     p = sub.add_parser("blind", help="S7 three-question blind-test package (issue #98)")

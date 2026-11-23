@@ -50,6 +50,7 @@ def run_recall(
     hops: int = 1,
     clock: str = "valid",
     limit: int = 50,
+    role: str | None = None,
 ) -> dict:
     """Run temporal + graph + keyword recall and return a structured combined report."""
     report: dict = {"temporal": [], "graph": [], "keyword": []}
@@ -82,7 +83,7 @@ def run_recall(
 
     # Existing FTS5 keyword road (Layer 1), kept separate for provenance.
     if keyword:
-        report["keyword"] = search_keyword(db_path, keyword, limit=limit)
+        report["keyword"] = search_keyword(db_path, keyword, limit=limit, role=role)
 
     report["counts"] = {
         "temporal": len(report["temporal"]),
@@ -99,7 +100,8 @@ def _render_text(report: dict) -> str:
     lines.append("")
     lines.append("## Temporal 命中")
     for r in report["temporal"][:10]:
-        lines.append(f"- `[{r.get('rec_id')} | {r.get('created_at') or r.get('valid_from')}]` {str(r.get('content', ''))[:80]}")
+        role = str(r.get("role", "?")).lower()
+        lines.append(f"- `[{r.get('rec_id')} | {r.get('created_at') or r.get('valid_from')} | {role}]` {str(r.get('content', ''))[:80]}")
     lines.append("")
     lines.append("## Graph 命中")
     for e in report["graph"][:10]:
@@ -107,7 +109,8 @@ def _render_text(report: dict) -> str:
     lines.append("")
     lines.append("## Keyword 命中（FTS5）")
     for k in report["keyword"][:10]:
-        lines.append(f"- `[{k['rec_id']} | {k['created_at']}]` {k['content'][:80]}")
+        role = str(k.get("role", "?")).lower()
+        lines.append(f"- `[{k['rec_id']} | {k['created_at']} | {role}]` {k['content'][:80]}")
     return "\n".join(lines)
 
 
@@ -125,6 +128,8 @@ def main() -> int:
     parser.add_argument("--clock", choices=["valid", "transaction"], default="valid")
     parser.add_argument("--lexicon", nargs="*", default=[])
     parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--role", choices=["user", "assistant", "all"], default="all",
+                        help="Filter keyword recall by role; default keeps both but lists user first (#95).")
     parser.add_argument("--json", action="store_true", help="Emit JSON report.")
     args = parser.parse_args()
 
@@ -143,6 +148,7 @@ def main() -> int:
             since=args.since, until=args.until, as_of=args.as_of,
             entity=args.entity, relation=args.relation, keyword=args.keyword,
             hops=args.hops, clock=args.clock, limit=args.limit,
+            role=None if args.role == "all" else args.role,
         )
         print(f"RECALL_OK temporal={report['counts']['temporal']} graph={report['counts']['graph']} keyword={report['counts']['keyword']}")
         if args.json:
