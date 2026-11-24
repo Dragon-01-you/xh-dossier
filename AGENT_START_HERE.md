@@ -110,7 +110,10 @@ S7 verify → 交付
 
 ```powershell
 python -X utf8 scripts/00_env_check.py --browser edge --dry-run
+python -X utf8 scripts/10_export_gate.py --raw work/raw/afterchat --download-dir "D:\eage下载"
 ```
+
+`10_export_gate.py` 没看到真实 `.md`/`.zip` 就返回 `EXPORT_BUTTON_MISSING` 或 `DOWNLOAD_INTERRUPTED`，退出码 1；此时停，不跑 S3。下载收尾崩溃时用 `11_finalize_download.py` 生成 `.md` 副本，不要猜“已经导出成功”。
 
 
 ### S3–S5 三条命令

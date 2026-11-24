@@ -52,7 +52,30 @@
 | 4 | 导出有没有落盘 | 点一次按钮，浏览器下载记录出现 `.md`；文件最终不是 `.crdownload` | 看第 4 节「下载卡住」 |
 | 5 | 登录态对不对 | 浏览器里打开的是你日常已登录的豆包/DeepSeek，不是桌面客户端的内嵌浏览器 | 换回本机日常浏览器重新登录；不要用 IAB |
 
-## 4. 下载卡住 / 一直 `.crdownload` 怎么办
+## 4. 导出按钮没出现：停，不进入下一步
+
+如果页面右下角没有白色圆形按钮，不要继续跑入库。先打印/看到这个状态：
+
+```text
+EXPORT_BUTTON_MISSING
+```
+
+然后由本人手动做 4 件事：
+
+1. 打开 `edge://extensions`，确认 Tampermonkey 或 ScriptCat 是启用状态；
+2. 在管理器面板里确认 AfterChat 是「启用」，不是灰色；
+3. 回到豆包会话页，按 `Ctrl+F5` 强刷；
+4. 看右下角有没有白色圆形按钮；有就手动点导出。
+
+导出成功后，由本人按 `Enter` 或输入 `continue`，才进入入库。没有真实 `.md`/`.zip` 落盘，就一直停在这里。
+
+对应门禁命令：
+
+```powershell
+python -X utf8 scripts/10_export_gate.py --raw work/raw/afterchat --download-dir "D:\eage下载"
+```
+
+## 5. 下载卡住 / 一直 `.crdownload` 怎么办
 
 AfterChat 用的是浏览器原生下载（`@grant none`），所以它完全遵守浏览器的下载设置：
 
@@ -63,7 +86,15 @@ AfterChat 用的是浏览器原生下载（`@grant none`），所以它完全遵
   2. 关掉「下载前询问保存位置」，或由本人在弹窗里点保存；
   3. 仍失败就停止，把 `Ctrl+J` 截图和 `.crdownload` 路径交给维护者，不要猜“已经导出成功”。
 
-## 5. 浏览器控制能力，别混在一起
+已查清的一种情况：Edge 下载历史记录 `state=4 INTERRUPTED`、`interrupt_reason=50 CRASH`，字节收满但收尾改名崩了，不是安全拦截。此时可以用恢复脚本生成 `.md` 副本，不删除原文件：
+
+```powershell
+python -X utf8 scripts/11_finalize_download.py --source-dir "D:\eage下载" --target-dir work/raw/afterchat --stable-seconds 3
+```
+
+这是恢复，不是“浏览器已经修好”。换机器仍可能复现。
+
+## 6. 浏览器控制能力，别混在一起
 
 | 组件 | 能做什么 | 不能做什么 |
 |---|---|---|
@@ -75,7 +106,7 @@ AfterChat 用的是浏览器原生下载（`@grant none`），所以它完全遵
 
 **一句话**：AfterChat 是“导出工人”，不是“浏览器控制器”。你要让 Agent 真的动浏览器，必须另装 sctl Browser（或 Playwright/Chrome DevTools）；只装 AfterChat 只能导出，不能控制。
 
-## 6. 缺件时的硬门禁
+## 7. 缺件时的硬门禁
 
 ```text
 没有脚本管理器 → 停止。给 Tampermonkey / ScriptCat 直达链接。
@@ -91,7 +122,7 @@ AfterChat 用的是浏览器原生下载（`@grant none`），所以它完全遵
 2. 不要把 DOM 兜底导出写成“对外发布路径”；DOM 只适合内部开发和临时救急。
 3. 不要在用户拒绝安装后继续跑全流程，然后把失败算到“模型不行”。
 
-## 7. 给维护者的自检命令
+## 8. 给维护者的自检命令
 
 ```powershell
 python -X utf8 scripts/00_env_check.py --browser edge --dry-run

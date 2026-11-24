@@ -440,6 +440,8 @@ def validate(args: argparse.Namespace) -> int:
         cmd.append("--enforce-score")
     if args.no_scorecard:
         cmd.append("--no-scorecard")
+    if getattr(args, "raw_root", None):
+        cmd += ["--raw-root", str(args.raw_root)]
     return _run(cmd)
 
 
@@ -642,6 +644,8 @@ def main() -> int:
     p.add_argument("--enforce-score", action="store_true",
                    help="fail when the issue #96 scorecard misses a threshold")
     p.add_argument("--no-scorecard", action="store_true", help="skip the scorecard")
+    p.add_argument("--raw-root", default=None,
+                   help="raw export dir for A-level quote cross-check (default: auto-detect beside kit)")
     p.set_defaults(func=validate)
 
     p = sub.add_parser("verify", help="check 6 files exist, review status, and validate")

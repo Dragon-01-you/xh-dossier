@@ -46,7 +46,7 @@
 > - 导出脚本：[AfterChat（GreasyFork #589622）](https://greasyfork.org/en/scripts/589622-afterchat-llm-chat-exporter) 或 [raw 直装](https://raw.githubusercontent.com/AfterThink/AfterChat-Script/main/afterchat.user.js)
 > - 要让 Agent 真的控制浏览器，再加 [sctl Browser](https://microsoftedge.microsoft.com/addons/detail/sctl-browser/nbmnkdfbjdhbdjjffgkocfdkemockepa) + [sctl](https://github.com/scriptscat/sctl)；AfterChat 本身不能控制浏览器。
 
-详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。
+详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。导出前先跑 `python -X utf8 scripts/10_export_gate.py --raw work/raw/afterchat --download-dir "你的下载目录"`；没有真实 `.md`/`.zip` 就停，不进入入库。
 **⚠️ 装扩展只是装了「引擎」，还必须装一个「导出脚本」才干活**：多平台推荐 **AfterChat**（GreasyFork #589622，约 30 平台），单平台备选见指南里的「按平台选脚本」表。另一个高频坑是浏览器的「下载前询问保存位置」——导出跑完会弹系统「另存为」窗口，需本人点保存，否则进度看似卡住、文件不落地。
 **网络退路**：浏览器商店、scriptcat.org 或 GreasyFork 打不开 / 超时时，引擎 ScriptCat 可直连 GitHub 开源发布页下载压缩包（向导加 `--download-release`）；按平台与场景的主路径 / 备选路径见指南「网络场景退路」一节。
 **⚠️ 浏览器开关最容易卡住的一步**：
