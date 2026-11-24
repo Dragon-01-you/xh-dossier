@@ -1,11 +1,15 @@
 # AGENT_START_HERE · 给任何零环境 Agent 的入口
 
-你只需要 Python 3.10+。核心路径没有第三方依赖；`pytest` 只在开发时用。
+你只需要 Python 3.11+。核心路径没有第三方依赖；`pytest` 只在开发时用。
+
+> **目录要求**：下面所有命令先 `cd` 到仓库根目录再运行；在别的目录用相对路径调脚本会报 `can't open file ... [Errno 2] No such file or directory`，先检查当前目录是不是仓库根。机器上没有 Python 时的安装入口、共享机器 per-user（被 launcher 拦截）退路，见 README「3.0 普通用户零终端安装与预检」。
+
+> 解释器说明：命令里的 `python` 指当前可用解释器；有 py launcher 的 Windows 也可用 `py -3.x`（x 为已装的次版本号）。
 
 ## 0. 先体检（10 秒）
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py doctor
+python -X utf8 scripts/xh.py doctor
 ```
 
 看到 `DOCTOR_OK` 再往下。`ERROR:` 必须解决；`WARN:` 可以先记录。
@@ -15,13 +19,13 @@ py -3.12 -X utf8 scripts/xh.py doctor
 ## 1. 初始化工作区
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py init
+python -X utf8 scripts/xh.py init
 ```
 
 会在 `work/` 建：
 
 - `raw/`：只读原始导出，别让模型改写
-- `interview/`：6 轮访谈原始回答
+- `interview/`：6 个阶段访谈原始回答
 - `kit/`：6 份档案草稿
 - `reports/`、`evidence/`
 
@@ -32,7 +36,7 @@ py -3.12 -X utf8 scripts/xh.py init
 如果手上已经有导出的 `work/raw/`，一条命令走完：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2
+python -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2
 ```
 
 期望：
@@ -62,13 +66,16 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
 3. 对 `work/kit_next/` 的“二层回流待确认区”，逐条判断：本人亲历？AI 代做/转述？已讲过？值得升格？不值得就删；
 4. 保留 `[待确认]`，不要用常识补全；本人签字后才可用 `backfill --apply-signed --confirm` 写入正式档案；
 5. 改写后重跑 `validate --strict`，仍要 `VALIDATE_OK`；
-6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿。
+6. 再把 `work/kit_next/` 交给下一个 Agent，而不是把机器初稿直接当定稿；
+7. 复核通过后落回执：`python -X utf8 scripts/xh.py review --confirm --kit work/kit`。
+   build 回执与档案旁的 `_evidence/review.json` 初始状态都是 `pending_review`；
+   没跑这一步，`verify` 与 S7 三问盲测会被阻断，并提示先复核，Agent 不能自行代签。
 
 ## 3. 真实全流程（推荐顺序）
 
 ```text
 S0 doctor
-S1 访谈 6 轮 → work/interview + work/kit
+S1 访谈 6 个阶段 → work/interview + work/kit
 S2 浏览器导出 → work/raw
 S3 ingest → work/unified_index.db
 S4 match → work/backfill_candidates.md
@@ -81,44 +88,29 @@ S7 verify → 交付
 
 ### S1 访谈
 
-读 `skills/onboarding-interviewer/SKILL.md`，6 轮、每轮 3 题；不要替用户编答案。每轮把回答写进 `work/interview/round-N.md`，再生成 `work/kit/` 的 6 份草稿。
+读 `skills/onboarding-interviewer/SKILL.md`，按 6 个阶段推进；每个阶段先问 2–3 个种子问题，拿到该阶段目标才进下一阶段，不按固定 3 题硬切。不要替用户编答案。每阶段把回答写进 `work/interview/stage-N.md`（兼容旧 `round-N.md`），再生成 `work/kit/` 的 6 份草稿。
 
 ### S2 导出
 
-优先看 `docs/02-multi-platform-export.md`：ScriptCat（引擎）+ AfterChat（工人），下载后用 `Ctrl+J` 核对落盘路径。
+优先读 `prompts/02_dom_export_agent.md`，执行零扩展 DOM 导出：
 
-如果目标 Agent **没有浏览器扩展权限**，用浏览器工具直接读当前会话 DOM：
+1. 在本人已登录的浏览器打开目标会话页（不要用桌面客户端的内嵌浏览器）；
+2. 确认 `.v_list_row`、`[data-message-role]`、`[data-testid="message_text_content"]` 仍在；
+3. 执行 `scripts/dom_export.js`：有页面求值能力就直接执行；没有就粘贴到 DevTools Console；
+4. 默认触发浏览器原生下载；也可以设 `window.__XH_DOM_EXPORT_NO_DOWNLOAD__ = true` 后读 `window.__XH_DOM_EXPORT__.markdown`，由 Agent 写进 `work/raw-doubao-dom/`；
+5. 用 `python -X utf8 scripts/xh.py ingest --raw work/raw-doubao-dom --db work/unified_index.db --query 口播` 验证 `INDEX_OK`。
 
-1. 打开已登录的对话页（豆包会话页等）；
-2. 让浏览器 Agent 读取消息行（豆包是 `.v_list_row`；有 `send-msg-bubble` 的是 User，否则 Assistant）；
-3. 按 AfterChat 兼容格式写 Markdown：
+这条路径只导出**你自己账号、自己可见**的会话；不要把别人的聊天、Cookie、密码、验证码写进 raw。`scripts/dom_export.js` 以当前豆包 DOM 的 `[data-message-role]` 为角色依据，旧文档里的 `.send-msg-bubble` 已不是当前站点的可靠标记，不要用旧选择器硬猜。
 
-```markdown
-## Metadata
-- **Source:** <url>
-- **Time:** YYYY-MM-DD
+如果必须用 AfterChat 扩展：先 `python -X utf8 scripts/xh.py export-setup --browser edge` 打开官方安装页；扩展安装的最终确认、浏览器原生「另存为」弹窗，仍由本人完成。扩展不是默认路径，DOM 导出才是零配置默认路径。
 
-## Conversation
-
-### 🧑‍💻 User
-
-<原文>
-
-### 🤖 Assistant
-
-<原文>
-```
-
-4. 落盘到 `work/raw/`，再用 `01` 验证 `INDEX_OK`。
-
-这条 DOM 兜底只适用于**你自己账号、自己可见**的会话；不要把别人的聊天或登录态抓下来。
 
 ### S3–S5 三条命令
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db --query 记错
-py -3.12 -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
+python -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db --query 记错
+python -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md
+python -X utf8 scripts/xh.py validate --kit work/kit --strict
 ```
 
 ### S6 二层回流
@@ -126,7 +118,7 @@ py -3.12 -X utf8 scripts/xh.py validate --kit work/kit --strict
 只有 `scripts/05_deep_backfill.py` 存在时才可用：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2
+python -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2
 ```
 
 `--apply-signed` 必须由本人对每条候选确认后再加；不要让 Agent 自己签字。
@@ -134,8 +126,8 @@ py -3.12 -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/ba
 Agent 可以先把候选机械地落成“未签字待确认区”，给本人复核：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py l2-apply --kit work/kit --l2 work/layer2 --out work/kit_next
-py -3.12 -X utf8 scripts/xh.py validate --kit work/kit_next --strict
+python -X utf8 scripts/xh.py l2-apply --kit work/kit --l2 work/layer2 --out work/kit_next
+python -X utf8 scripts/xh.py validate --kit work/kit_next --strict
 ```
 
 `08_l2_apply.py` 只做三件事：复制 6 份档案、追加带 `[待确认]` + `原文/出处` 的待确认区、重跑严格校验。它不会填签字栏，也不会改正式档案。
@@ -145,7 +137,7 @@ py -3.12 -X utf8 scripts/xh.py validate --kit work/kit_next --strict
 需要先有 `work/unified_index.db`（S3 产物）：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026-11-20 --limit 50
+python -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026-11-20 --limit 50
 ```
 
 它会依次跑 `05_temporal_index.py backfill`（事件时间优先、未知不伪装成提及日）、`06_graph_index.py build`（规则抽取实体-关系边；未知事件不伪造 valid time）、`07_recall_time_graph.py`（时间 / 1~2 跳图 / FTS 关键词三路召回）。这是**辅助检索**，不是 6 份档案的替代品；图的抽取是规则法，召回不保证覆盖开放域表达。
@@ -153,25 +145,30 @@ py -3.12 -X utf8 scripts/xh.py retrieval --db work/unified_index.db --as-of 2026
 ### S7 最终验收
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py verify --kit work/kit --strict
+python -X utf8 scripts/xh.py verify --kit work/kit --strict
 ```
 
-看到 `VALIDATE_OK` 才算 6 文件结构合格。再用一个**全新的** Agent 只读 `work/kit/AGENTS.md` 和 5 份档案，确认它能复述你的判断准则、红线和当前主线；不能，就回到 S1/S6。
+看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。
+盲测包由 `python -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
 
-## 4. 快速演示（不访谈、不导出）
+## 4. 快速演示（合成样例，不读你的真实数据）
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py demo
+python -X utf8 scripts/xh.py demo
 ```
 
-期望 `INDEX_OK → FOUR_WAY_OK → VALIDATE_OK → DEMO_OK`。
+它会用 `examples/sample_raw` + `examples/sample_interview`（**合成样例，不是真人访谈**）跑完整的
+index → four-way → 6 份档案 → L2 待确认区 → 三路召回 → 严格校验。
+
+期望 `INDEX_OK → FOUR_WAY_OK → BUILD_OK → SCORECARD_OK → VALIDATE_OK → DEMO_OK`。
+如果看到 `SCORECARD_FAIL`，说明样例或校验门禁坏了，不要直接交付。
 
 ## 5. 交付给下一个 Agent
 
 把 `work/kit/` 整个目录给它可以；或者先打包：
 
 ```powershell
-py -3.12 -X utf8 scripts/xh.py package --out dist/xh-dossier.zip
+python -X utf8 scripts/xh.py package --out dist/xh-dossier.zip
 ```
 
 包里不含 `work/`、`.git/`、`dist/`；raw 和访谈原文默认只留本机。

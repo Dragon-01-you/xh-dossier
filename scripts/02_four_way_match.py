@@ -18,6 +18,7 @@ from typing import Iterable
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+from sqlite_compat import connect_db
 
 _mod01 = import_module("01_clean_and_index")
 search_keyword = _mod01.search_keyword
@@ -223,7 +224,7 @@ def run_four_way_pipeline(
     if not db_path.is_file():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     con.row_factory = sqlite3.Row
     try:
         rows = [dict(r) for r in con.execute("SELECT rec_id, source_file, created_at, role, content FROM records ORDER BY rec_id").fetchall()]

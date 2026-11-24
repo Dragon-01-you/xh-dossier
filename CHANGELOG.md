@@ -61,7 +61,7 @@
 ### 修复：真实 6 档案命名兼容
 - `03_validate_kit.py` 接受真实命名 `04-反面案例清单.md`（别名到 `04-正反例避坑账.md`），不再把真实档案误判为缺文件。
 - 运行期变量 `<任务>` / `<项目>` / `<日期>` / `<分支>` 不再被当作未填占位符；模板里的 `<填写...>` 仍会在 `--strict` 下失败。
-- 真实 6 档案 `E:\芯火知识库\芯火知识库\个人知识库\00-热加载核心` 已实测 `VALIDATE_OK`。
+- 真实 6 档案 `<你的知识库路径>/00-热加载核心` 已实测 `VALIDATE_OK`。
 
 ### 修复：事件时间与提及时间分离（#10 / #37 / #46 / #49）
 - `event_time.py`：普通陈述/状态句不再复制 `created_at`；`目前/现在的目录` 不当作“当天事件”；显式过去日期即使没有“记得/以前”也判 retrospective；assistant 一律 `event_date=""`。
@@ -92,6 +92,7 @@
 ### 测试与验收
 - main：`187 passed`；release2：`189 passed`。
 - 真实 6 档案 strict：`VALIDATE_OK`。
+- 验收口径（#97）：`VALIDATE_OK` 只代表结构合格；记“通过”前须对照 `docs/standard-v1.md` 的外部指标与 `docs/scorecard.md` 评分卡，阈值由用户裁定。
 - 全新目录一键安装：`INSTALL_OK` + `DEMO_OK`（`INDEX_OK → FOUR_WAY_OK → VALIDATE_OK`）。
 - `xh.py retrieval` 在 demo 库上真实跑通：`05 backfill` → `06 build` → `07 recall`，exit 0。
 

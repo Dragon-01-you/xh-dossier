@@ -176,18 +176,19 @@ def test_04_alias_apply_writes_canonical(tmp_path):
     _make_profiles(profiles_dir)
     patches = tmp_path / "patches"
     patches.mkdir()
-    canonical = "04-反面案例清单.md"
+    canonical = "04-正反例避坑账.md"
+    legacy = "04-反面案例清单.md"
     (patches / f"{canonical}.patch.md").write_text(
         "<!-- L2-BACKFILL-BEGIN -->\n### L2-0001 [待确认] [REC-0001]\n<!-- L2-BACKFILL-END -->\n",
         encoding="utf-8")
     ledger = {"L2-0001": {"candidate_id": "L2-0001", "status": "signed",
-                          "target_profile": "04-正反例避坑账.md"}}
+                          "target_profile": legacy}}
     res = l2.apply_signed(patches, profiles_dir, ledger, confirm=True)
     assert res["applied"] == 1
     body = (profiles_dir / canonical).read_text(encoding="utf-8")
     assert "L2-0001" in body
-    # The template alias file must not be created as a separate target.
-    assert not (profiles_dir / "04-正反例避坑账.md").exists()
+    # The legacy alias file must not be created as a separate target.
+    assert not (profiles_dir / legacy).exists()
 
 
 # --- coverage decision C0~C3 ---
@@ -295,7 +296,7 @@ def test_apply_signed_persists_archived(tmp_path):
     _make_profiles(profiles_dir)
     patches = tmp_path / "patches"
     patches.mkdir()
-    target = "04-反面案例清单.md"
+    target = "04-正反例避坑账.md"
     (patches / f"{target}.patch.md").write_text(
         "<!-- L2-BACKFILL-BEGIN -->\n### L2-0001 [待确认] ...\n<!-- L2-BACKFILL-END -->\n",
         encoding="utf-8")

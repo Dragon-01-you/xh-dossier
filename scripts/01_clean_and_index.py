@@ -13,6 +13,11 @@ import sqlite3
 from typing import Any
 
 from event_time import detect_event_time
+from sqlite_compat import connect_db
+# Issue #100: the only extensions this stage parses. Every other file (sqlite, zip, image, ...) is counted and listed rather than silently skipped; see docs/03-data-sources.md for the identify -> export -> normalize matrix.
+RECOGNIZED_EXTS = {".json", ".jsonl", ".md", ".txt"}
+
+
 
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
@@ -238,7 +243,7 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
     if db_path.exists():
         db_path.unlink()
 
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     try:
         con.execute(
             """
@@ -261,6 +266,8 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
         dedup_skipped = 0
         indexed = 0
         encoding_stats: dict = {"files": 0, "chars": 0, "detail": []}
+        skipped_unrecognized = 0
+        skipped_detail: list[tuple[str, str]] = []
 
         for path in sorted(raw_dir.rglob("*")):
             if not path.is_file():
@@ -273,6 +280,11 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
             elif ext in {".md", ".txt"}:
                 extracted = _extract_from_text(path, encoding_stats)
             else:
+                # Issue #100: non-whitelist carriers are not parsed here; they
+                # must be normalized to a whitelist format upstream (see the
+                # data-sources matrix). Count and list them instead of hiding.
+                skipped_unrecognized += 1
+                skipped_detail.append((path.name, ext or "(no ext)"))
                 continue
 
             for item in extracted:
@@ -324,6 +336,8 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
         "encoding_replaced_files": encoding_stats["files"],
         "encoding_replaced_chars": encoding_stats["chars"],
         "encoding_replaced_detail": encoding_stats["detail"],
+        "skipped_unrecognized_files": skipped_unrecognized,
+        "skipped_unrecognized_detail": skipped_detail,
     }
 
 
@@ -331,8 +345,20 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[dict[str, str]]:
-    """Run exact keyword search using FTS5 trigram (>=3 chars) with escaped SQL LIKE fallback (<3 chars)."""
+def search_keyword(
+    db_path: pathlib.Path,
+    query: str,
+    limit: int = 20,
+    role: str | None = None,
+    role_sort: bool = True,
+) -> list[dict[str, str]]:
+    """Run exact keyword search using FTS5 trigram (>=3 chars) with escaped SQL LIKE fallback (<3 chars).
+
+    Issue #95: ``role`` filters to ``user`` / ``assistant`` (None = all); with
+    ``role_sort`` (default) the user's own words are placed ahead of assistant
+    replies, so an AI reply cannot silently occupy the top of the recall list.
+    The stable sort keeps the original FTS order inside each role group.
+    """
     if not db_path.is_file():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
@@ -351,9 +377,8 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
                 FROM records_fts f
                 JOIN records r ON r.rec_id = f.rec_id
                 WHERE records_fts MATCH ?
-                LIMIT ?
                 """,
-                (safe_q, limit),
+                (safe_q,),
             ).fetchall()
         else:
             escaped = _escape_like(q)
@@ -362,11 +387,16 @@ def search_keyword(db_path: pathlib.Path, query: str, limit: int = 20) -> list[d
                 SELECT *
                 FROM records
                 WHERE content LIKE ? ESCAPE '\\'
-                LIMIT ?
                 """,
-                (f"%{escaped}%", limit),
+                (f"%{escaped}%",),
             ).fetchall()
-        return [dict(row) for row in rows]
+        results = [dict(row) for row in rows]
+        if role:
+            wanted = role.lower()
+            results = [r for r in results if str(r.get("role", "")).lower() == wanted]
+        if role_sort:
+            results.sort(key=lambda r: 0 if str(r.get("role", "")).lower() == "user" else 1)
+        return results[:limit]
     finally:
         con.close()
 
@@ -401,6 +431,10 @@ def main() -> int:
         print(f"ENCODING_REPLACED: file={stats['encoding_replaced_files']} chars={stats['encoding_replaced_chars']}")
         print("不要把含非法 UTF-8 的索引当成可信冷库；请将 raw 文件另存为 UTF-8 后重跑 01 清洗。")
         return 2
+    if stats["skipped_unrecognized_files"] > 0:
+        print(f"WARN: {stats['skipped_unrecognized_files']} 个非白名单扩展名文件未解析（归一要求见 docs/03-data-sources.md）：")
+        for fname, ext in stats["skipped_unrecognized_detail"][:10]:
+            print(f"  - {fname} ({ext})")
     print(f"INDEX_OK total_raw={stats['total_raw']} dedup_skipped={stats['dedup_skipped']} indexed={stats['indexed']}")
     if args.query:
         hits = search_keyword(args.db, args.query)

@@ -36,11 +36,13 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from sqlite_compat import connect_db
+
 # ---------------------------------------------------------------- constants
 
 PROFILE_FILES = (
     "AGENTS.md", "00-总入口索引.md", "01-身份与当前主线.md",
-    "02-核心判断准则.md", "03-硬规则与表达黑话.md", "04-反面案例清单.md",
+    "02-核心判断准则.md", "03-硬规则与表达黑话.md", "04-正反例避坑账.md",
 )
 
 STOPWORDS = {
@@ -59,7 +61,7 @@ GRAM_PARTICLES = set("了的是")
 # Common content-word characters (verbs/nouns/adjectives) — filters out pure
 # auxiliary phrases. Extensible; jieba.posseg could replace this if available.
 CONTENT_HINT = set(
-    "开工定验收标准做完交付上线拖延踩坑放弃闲鱼振兴杯笔记知识库向量回流截图封面钩子公司群"
+    "开工定验收标准做完交付上线拖延踩坑放弃笔记知识库向量回流截图封面钩子公司群"
     "工验收准备文件返复理解问题学习项目任务时间日月年份代码工具脚本数据报告内容方案"
     "改错失败成功试换删改建读看写说听做买卖教练习记录整理发布解释重新开始结束"
 )
@@ -78,7 +80,17 @@ NON_PERSONAL_MATERIAL_TOKENS = (
     "感谢收听", "收听", "本期", "转写", "字幕", "访谈",
     "skill://", "plugin://", "[操作电脑]", "[seedaudio", "[github]",
     "内容类型", "时长", "https://", "http://",
+    # Issue #94: pasted third-party person bios / quoted philosophy.
+    "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
+    "书中说", "节选自", "摘自", "引用自", "主播", "嘉宾", "访谈实录",
+    "转写稿", "作为过去", "五十年",
 )
+# Issue #94: a question to the AI is not a durable personal-experience record.
+QUESTION_RE = re.compile(
+    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|怎么回事|为何|能否|"
+    r"还是说|你可以看一下|请问|哪些|什么区别|什么意思|[？?])"
+)
+
 NEGATION = ("先不要", "不要", "先别", "别直接", "禁止", "绝不", "别帮我")
 SUBJECT_USER_MISS = ("我没听懂", "我没看懂", "没明白你说的")
 SUBJECT_AI_MISS = ("你还是没理解", "你没理解", "没听懂你讲", "完全没理解我")
@@ -115,8 +127,8 @@ def _source_title(source_file: str) -> str:
 
 # Signal type -> (target profile, section anchor)
 PROFILE_SECTION_MAP = {
-    "recurring_mistake": ("04-反面案例清单.md", "## 二、反例标本"),
-    "positive_pattern": ("04-反面案例清单.md", "## 一、正例标本"),
+    "recurring_mistake": ("04-正反例避坑账.md", "## 二、反例标本"),
+    "positive_pattern": ("04-正反例避坑账.md", "## 一、正例标本"),
     "complaint": ("02-核心判断准则.md", "## 三、术"),
     "core_fact": ("01-身份与当前主线.md", "## 一、不可篡改的核心事实"),
     "hard_rule": ("03-硬规则与表达黑话.md", "## 一、对任何接手 AI 的 11 条硬规则"),
@@ -177,8 +189,8 @@ def load_profiles(profile_dir: pathlib.Path) -> dict[str, str]:
         if p.parent != base:
             raise ValueError(f"PROFILE_TARGET_ESCAPE: {name!r} leaves profiles dir")
         if not p.is_file():
-            # The 6th file has a known naming variant; accept both.
-            alt = profile_dir / "04-正反例避坑账.md"
+            # The 6th file has a known legacy alias; accept both.
+            alt = profile_dir / "04-反面案例清单.md"
             if name.startswith("04-") and alt.is_file():
                 p = alt.resolve()
                 if p.parent != base:
@@ -194,10 +206,10 @@ def load_profiles(profile_dir: pathlib.Path) -> dict[str, str]:
 # resolved path must stay inside profiles_dir (rejects `..`, absolute paths,
 # `./name`, `sub/../name`, symlink escape).
 PROFILE_WHITELIST = frozenset(PROFILE_FILES)
-# Template name -> canonical hot-load name. The 6th profile ships under two
-# names in the wild (real base `04-反面案例清单.md` vs template
-# `04-正反例避坑账.md`); both must map to the SAME on-disk 04 file.
-PROFILE_TEMPLATE_ALIASES = {"04-正反例避坑账.md": "04-反面案例清单.md"}
+# Legacy alias -> canonical hot-load name. The 6th profile ships under two
+# names in the wild (canonical `04-正反例避坑账.md` vs older real base
+# `04-反面案例清单.md`); both must map to the SAME on-disk 04 file.
+PROFILE_TEMPLATE_ALIASES = {"04-反面案例清单.md": "04-正反例避坑账.md"}
 
 
 def _canonical_profile_name(name: str) -> str:
@@ -280,7 +292,7 @@ def parse_first_pass(backfill_md: pathlib.Path) -> FirstPassIndex:
 def load_records(db_path: pathlib.Path) -> list[dict[str, str]]:
     if not db_path.is_file():
         raise FileNotFoundError(f"DB_MISSING: {db_path}")
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     con.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in con.execute(
@@ -318,6 +330,9 @@ def classify_narrative(content: str) -> tuple[bool, str]:
         return False, "non_personal:prompt_prefix"
     if any(tok in n for tok in NON_PERSONAL_MATERIAL_TOKENS):
         return False, "non_personal:ai_or_material"
+    if QUESTION_RE.search(c):
+        return False, "non_personal:question"
+
     if not any(m in c for m in EXPERIENCE_MARKERS):
         return False, "non_personal:no_first_person"
     if len(c) < 15:
@@ -758,7 +773,7 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
         if AGENTS_READ_ONLY and actual.name == "AGENTS.md":
             continue
         if not actual.is_file():
-            alt = profiles_dir / "04-正反例避坑账.md"
+            alt = profiles_dir / "04-反面案例清单.md"
             if actual.name.startswith("04-") and alt.is_file():
                 actual = alt.resolve()
                 if actual.parent != base:
