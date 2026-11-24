@@ -36,6 +36,8 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from sqlite_compat import connect_db
+
 # ---------------------------------------------------------------- constants
 
 PROFILE_FILES = (
@@ -290,7 +292,7 @@ def parse_first_pass(backfill_md: pathlib.Path) -> FirstPassIndex:
 def load_records(db_path: pathlib.Path) -> list[dict[str, str]]:
     if not db_path.is_file():
         raise FileNotFoundError(f"DB_MISSING: {db_path}")
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     con.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in con.execute(

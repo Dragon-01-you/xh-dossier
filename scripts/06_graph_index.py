@@ -36,6 +36,7 @@ from typing import Any, Iterable
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+from sqlite_compat import connect_db
 
 _mod01 = import_module("01_clean_and_index")
 _mod02 = import_module("02_four_way_match")
@@ -106,7 +107,7 @@ CREATE TABLE IF NOT EXISTS relations (
 def _connect(db_path: pathlib.Path) -> sqlite3.Connection:
     if not db_path.is_file():
         raise FileNotFoundError(f"Database not found: {db_path}")
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     con.row_factory = sqlite3.Row
     return con
 

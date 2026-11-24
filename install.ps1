@@ -2,7 +2,8 @@
     [string]$Target = "$env:USERPROFILE\XH-Dossier",
     [string]$Archive = "",
     [switch]$RunDemo,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$ForceBootstrap
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,24 +16,49 @@ Write-Output "source: $src"
 # If Python is missing, leave no half-installed target behind.
 $pyExe = $null
 $pyArgs = @()
-foreach ($candidate in @(@('py', '-3'), @('python', ''))) {
-    $exe = $candidate[0]
-    $args = @($candidate[1..($candidate.Count - 1)] | Where-Object { $_ })
-    try {
-        & $exe @args -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 3)" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            $pyExe = $exe
-            $pyArgs = $args
-            break
-        }
-    } catch { }
+if (-not $ForceBootstrap) {
+    $portablePy = Join-Path $env:LOCALAPPDATA 'XH-Dossier\python\python.exe'
+    if (Test-Path -LiteralPath $portablePy) {
+        try {
+            & $portablePy -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 3)" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $pyExe = $portablePy
+                $pyArgs = @()
+            }
+        } catch { }
+    }
+    foreach ($candidate in @(@('py', '-3'), @('python', ''))) {
+        $exe = $candidate[0]
+        $args = @($candidate[1..($candidate.Count - 1)] | Where-Object { $_ })
+        try {
+            & $exe @args -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 3)" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $pyExe = $exe
+                $pyArgs = $args
+                break
+            }
+        } catch { }
+    }
 }
 
 if (-not $pyExe) {
-    Write-Output "INSTALL_FAIL: 未找到 Python 3.11+（当前机器没有可用的 Python 解释器）。"
+    $bootstrap = Join-Path $PSScriptRoot 'bootstrap.ps1'
+    if (Test-Path -LiteralPath $bootstrap) {
+        Write-Output "PYTHON_MISSING: 尝试用 bootstrap.ps1 下载并安装 Python 3.11+。"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir "$env:LOCALAPPDATA\XH-Dossier\python" -ScriptsDir (Join-Path $Target 'scripts')
+        $candidate = Join-Path $env:LOCALAPPDATA 'XH-Dossier\python\python.exe'
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $candidate)) {
+            $pyExe = $candidate
+            $pyArgs = @()
+        }
+    }
+}
+
+if (-not $pyExe) {
+    Write-Output "INSTALL_FAIL: 未找到 Python 3.11+，自动安装也没有成功。"
     Write-Output "安装路径（任选其一，装完重跑本脚本）："
-    Write-Output "  1) winget（Windows 自带包管理器）：winget install Python.Python.3.12"
-    Write-Output "  2) 官网下载页：https://www.python.org/downloads/  选 Python 3.11 或更新版本，安装时勾选 Add python.exe to PATH。"
+    Write-Output "  1) 官方安装包：https://www.python.org/downloads/  选 Python 3.11 或更新版本。"
+    Write-Output "  2) winget（如机器有）：winget install Python.Python.3.12"
     Write-Output "  3) 共享机器 / per-user 安装被 launcher 拦截：见 README「per-user 安装退路」，安装参数 Include_launcher=0，装好后用 python 调用。"
     exit 1
 }
@@ -78,6 +104,21 @@ if ($Archive) {
         $_.Name -notin $exclude
     } | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $Target -Recurse -Force
+    }
+}
+
+# GitHub / 发布 zip 常带一个顶层目录（xh-dossier-<ref>/）。install.ps1 的
+# target 约定是“仓库根”，所以单层顶层目录要拍平，否则后续 scripts/xh.py
+# 会去 target\scripts 找而实际在 target\xh-dossier-...\scripts。
+if ($Archive) {
+    $children = @(Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue)
+    if ($children.Count -eq 1 -and $children[0].PSIsContainer) {
+        $nested = $children[0].FullName
+        Get-ChildItem -LiteralPath $nested -Force | ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination $Target -Force
+        }
+        Remove-Item -LiteralPath $nested -Recurse -Force
+        Write-Output "flatten: $($children[0].Name) -> $Target"
     }
 }
 

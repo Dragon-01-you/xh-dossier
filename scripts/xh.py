@@ -26,6 +26,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORK = ROOT / "work"
 TEMPLATES = ROOT / "templates"
 SAMPLE_RAW = ROOT / "examples" / "sample_raw"
+SAMPLE_INTERVIEW = ROOT / "examples" / "sample_interview"
 
 REQUIRED_SCRIPTS = [
     "01_clean_and_index.py",
@@ -251,17 +252,53 @@ def init(args: argparse.Namespace) -> int:
     return 0
 
 
+def export_setup(args: argparse.Namespace) -> int:
+    cmd = [
+        sys.executable, "-X", "utf8", str(_script("00_export_wizard.py")),
+        "--browser", args.browser,
+    ]
+    if args.yes:
+        cmd.append("--yes")
+    if args.download_release:
+        cmd.append("--download-release")
+    if args.no_afterchat:
+        cmd.append("--no-afterchat")
+    return _run(cmd)
+
+
 def demo(args: argparse.Namespace) -> int:
     demo_dir = WORK / "demo"
+    if demo_dir.exists():
+        # Windows can transiently refuse to remove a directory while a
+        # previous demo/antivirus handle is still open. Never make the
+        # first-run demo fail because of a stale work/demo; use a fresh
+        # timestamped directory as the fallback.
+        try:
+            shutil.rmtree(demo_dir)
+        except OSError:
+            demo_dir = WORK / ("demo-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     demo_dir.mkdir(parents=True, exist_ok=True)
     db = demo_dir / "unified_index.db"
     report = demo_dir / "backfill_candidates.md"
-    rc = _run([sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")), "--raw", str(SAMPLE_RAW), "--db", str(db), "--query", "记错"])
-    if rc == 0:
-        rc = _run([sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")), "--db", str(db), "--out", str(report)])
-    if rc == 0:
-        rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")), "--target", str(TEMPLATES)])
-    payload = _receipt("demo", rc == 0, demo_dir=str(demo_dir), db=str(db), report=str(report))
+    # The demo is a complete first-run sample: synthetic chat records plus a
+    # synthetic 6-stage interview. It must reach a passing scorecard, otherwise
+    # `install.ps1 -RunDemo` would print a scary SCORECARD_FAIL on a fresh PC.
+    build_args = argparse.Namespace(
+        raw=str(SAMPLE_RAW),
+        db=str(db),
+        kit=str(demo_dir / "kit"),
+        l2=str(demo_dir / "layer2"),
+        report=str(report),
+        interview=str(SAMPLE_INTERVIEW),
+        query="记错",
+        skip_retrieval=False,
+        apply_unsigned=True,
+        kit_next=str(demo_dir / "kit_next"),
+        enforce_score=True,
+    )
+    rc = build(build_args)
+    payload = _receipt("demo", rc == 0, demo_dir=str(demo_dir), db=str(db),
+                       report=str(report), interview=str(SAMPLE_INTERVIEW))
     path = _write_receipt("demo", payload)
     print("DEMO_OK" if rc == 0 else "DEMO_FAIL")
     print("receipt:", path)
@@ -343,7 +380,8 @@ def build(args: argparse.Namespace) -> int:
             if rc != 0:
                 return rc
     rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
-               "--target", str(kit), "--strict"])
+               "--target", str(kit), "--strict"]
+              + (["--enforce-score"] if getattr(args, "enforce_score", False) else []))
     # Issue #90: a fresh draft is always pending personal review; confirmation
     # is a separate human action (`review --confirm`), never an Agent step.
     _write_review_status(kit, REVIEW_PENDING, note="fresh build; pending personal review")
@@ -576,6 +614,13 @@ def main() -> int:
     p = sub.add_parser("init", help="create work dirs and copy the 6 templates")
     p.set_defaults(func=init)
 
+    p = sub.add_parser("export-setup", help="open official ScriptCat/AfterChat install pages (consent gate)")
+    p.add_argument("--browser", choices=["edge", "chrome", "site"], default="edge")
+    p.add_argument("--yes", action="store_true", help="confirm consent non-interactively")
+    p.add_argument("--download-release", action="store_true", help="download ScriptCat official release instead of opening store")
+    p.add_argument("--no-afterchat", action="store_true", help="only open the engine page")
+    p.set_defaults(func=export_setup)
+
     p = sub.add_parser("demo", help="run the no-third-party sample pipeline")
     p.set_defaults(func=demo)
 
@@ -634,6 +679,8 @@ def main() -> int:
                    help="keep the first-pass kit unchanged")
     p.add_argument("--kit-next", default=None,
                    help="output of the unsigned layer-2 pending zone (default: <kit parent>/kit_next)")
+    p.add_argument("--enforce-score", action="store_true",
+                   help="fail when the issue #96 scorecard misses a threshold (default: advisory)")
     p.set_defaults(func=build)
 
     p = sub.add_parser("l2-apply", help="apply L2 candidates as an unsigned pending zone")

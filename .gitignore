@@ -1,3 +1,7 @@
+# Build outputs (generated, not source)
+dist/
+Microsoft/
+
 # User private data (never commit raw chat logs or built local DBs)
 raw/
 work/

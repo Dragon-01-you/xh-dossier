@@ -13,6 +13,7 @@ import sqlite3
 from typing import Any
 
 from event_time import detect_event_time
+from sqlite_compat import connect_db
 # Issue #100: the only extensions this stage parses. Every other file (sqlite, zip, image, ...) is counted and listed rather than silently skipped; see docs/03-data-sources.md for the identify -> export -> normalize matrix.
 RECOGNIZED_EXTS = {".json", ".jsonl", ".md", ".txt"}
 
@@ -242,7 +243,7 @@ def clean_and_index(raw_dir: pathlib.Path, db_path: pathlib.Path) -> dict[str, A
     if db_path.exists():
         db_path.unlink()
 
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     try:
         con.execute(
             """

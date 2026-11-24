@@ -33,6 +33,8 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
+from sqlite_compat import connect_db
+
 # Canonical kit filename for section 04. Older real kits used the legacy
 # alias `04-反面案例清单.md`, which the validator still accepts on read.
 KIT_04_CANONICAL = "04-正反例避坑账.md"
@@ -806,7 +808,7 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
     if not db_path.is_file():
         raise FileNotFoundError(f"DB_NOT_FOUND: {db_path}")
     bundle = INTERVIEW.load_interview(interview)
-    con = sqlite3.connect(str(db_path))
+    con = connect_db(db_path)
     con.row_factory = sqlite3.Row
     try:
         rows = [dict(r) for r in con.execute("SELECT * FROM records ORDER BY created_at, rec_id")]

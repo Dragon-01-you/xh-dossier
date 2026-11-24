@@ -431,7 +431,11 @@ def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
     f02 = find_kit_file(target_dir, "02-核心判断准则.md")
     if f02 is not None:
         lines = f02.read_text(encoding="utf-8", errors="replace").splitlines()
-        sourced = [ln for ln, l in enumerate(lines, 1) if l.startswith("- **候选") and "原文" in l]
+        sourced = [
+            ln for ln, l in enumerate(lines, 1)
+            if (l.startswith("- **候选") or l.startswith("- **A级·访谈"))
+            and "原文" in l and "出处" in l
+        ]
         for lineno, line in enumerate(lines, 1):
             if PRINCIPLE_PADDING_RE.search(line):
                 findings.append(SemanticFinding(

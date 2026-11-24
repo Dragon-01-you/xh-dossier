@@ -158,6 +158,19 @@ def test_interview_outranks_raw_and_conflict_is_marked(tmp_path: pathlib.Path) -
     assert "不得覆盖访谈记录" in note
 
 
+def test_interview_principle_is_not_reported_as_empty(tmp_path: pathlib.Path) -> None:
+    """A-level interview principles are sourced bullets; semantic audit must not
+    mistake them for an empty 02 file just because they do not start with 候选."""
+    folder = _write_interview(tmp_path)
+    db = _db(tmp_path)
+    kit = tmp_path / "kit"
+    BOOTSTRAP.build_kit(db, kit, interview=folder)
+
+    findings = BOOTSTRAP.VALIDATOR.audit_semantics(kit)
+    empty = [f for f in findings if f.code == "SEMANTIC_PRINCIPLE_EMPTY"]
+    assert not empty, empty
+
+
 def test_no_interview_keeps_baseline_behaviour(tmp_path: pathlib.Path) -> None:
     db = _db(tmp_path)
     kit = tmp_path / "kit"

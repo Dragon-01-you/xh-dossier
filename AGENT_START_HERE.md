@@ -92,33 +92,18 @@ S7 verify → 交付
 
 ### S2 导出
 
-优先看 `docs/02-multi-platform-export.md`：ScriptCat（引擎）+ AfterChat（工人），下载后用 `Ctrl+J` 核对落盘路径。
+优先读 `prompts/02_dom_export_agent.md`，执行零扩展 DOM 导出：
 
-如果目标 Agent **没有浏览器扩展权限**，用浏览器工具直接读当前会话 DOM：
+1. 在本人已登录的浏览器打开目标会话页（不要用桌面客户端的内嵌浏览器）；
+2. 确认 `.v_list_row`、`[data-message-role]`、`[data-testid="message_text_content"]` 仍在；
+3. 执行 `scripts/dom_export.js`：有页面求值能力就直接执行；没有就粘贴到 DevTools Console；
+4. 默认触发浏览器原生下载；也可以设 `window.__XH_DOM_EXPORT_NO_DOWNLOAD__ = true` 后读 `window.__XH_DOM_EXPORT__.markdown`，由 Agent 写进 `work/raw-doubao-dom/`；
+5. 用 `python -X utf8 scripts/xh.py ingest --raw work/raw-doubao-dom --db work/unified_index.db --query 口播` 验证 `INDEX_OK`。
 
-1. 打开已登录的对话页（豆包会话页等）；
-2. 让浏览器 Agent 读取消息行（豆包是 `.v_list_row`；有 `send-msg-bubble` 的是 User，否则 Assistant）；
-3. 按 AfterChat 兼容格式写 Markdown：
+这条路径只导出**你自己账号、自己可见**的会话；不要把别人的聊天、Cookie、密码、验证码写进 raw。`scripts/dom_export.js` 以当前豆包 DOM 的 `[data-message-role]` 为角色依据，旧文档里的 `.send-msg-bubble` 已不是当前站点的可靠标记，不要用旧选择器硬猜。
 
-```markdown
-## Metadata
-- **Source:** <url>
-- **Time:** YYYY-MM-DD
+如果必须用 AfterChat 扩展：先 `python -X utf8 scripts/xh.py export-setup --browser edge` 打开官方安装页；扩展安装的最终确认、浏览器原生「另存为」弹窗，仍由本人完成。扩展不是默认路径，DOM 导出才是零配置默认路径。
 
-## Conversation
-
-### 🧑‍💻 User
-
-<原文>
-
-### 🤖 Assistant
-
-<原文>
-```
-
-4. 落盘到 `work/raw/`，再用 `01` 验证 `INDEX_OK`。
-
-这条 DOM 兜底只适用于**你自己账号、自己可见**的会话；不要把别人的聊天或登录态抓下来。
 
 ### S3–S5 三条命令
 
@@ -166,13 +151,17 @@ python -X utf8 scripts/xh.py verify --kit work/kit --strict
 看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。
 盲测包由 `python -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
 
-## 4. 快速演示（不访谈、不导出）
+## 4. 快速演示（合成样例，不读你的真实数据）
 
 ```powershell
 python -X utf8 scripts/xh.py demo
 ```
 
-期望 `INDEX_OK → FOUR_WAY_OK → VALIDATE_OK → DEMO_OK`。
+它会用 `examples/sample_raw` + `examples/sample_interview`（**合成样例，不是真人访谈**）跑完整的
+index → four-way → 6 份档案 → L2 待确认区 → 三路召回 → 严格校验。
+
+期望 `INDEX_OK → FOUR_WAY_OK → BUILD_OK → SCORECARD_OK → VALIDATE_OK → DEMO_OK`。
+如果看到 `SCORECARD_FAIL`，说明样例或校验门禁坏了，不要直接交付。
 
 ## 5. 交付给下一个 Agent
 
