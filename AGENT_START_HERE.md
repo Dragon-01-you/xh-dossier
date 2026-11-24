@@ -102,7 +102,18 @@ S7 verify → 交付
 
 这条路径只导出**你自己账号、自己可见**的会话；不要把别人的聊天、Cookie、密码、验证码写进 raw。`scripts/dom_export.js` 以当前豆包 DOM 的 `[data-message-role]` 为角色依据，旧文档里的 `.send-msg-bubble` 已不是当前站点的可靠标记，不要用旧选择器硬猜。
 
-如果必须用 AfterChat 扩展：先 `python -X utf8 scripts/xh.py export-setup --browser edge` 打开官方安装页；扩展安装的最终确认、浏览器原生「另存为」弹窗，仍由本人完成。扩展不是默认路径，DOM 导出才是零配置默认路径。
+如果必须用 AfterChat 扩展：先 `python -X utf8 scripts/xh.py export-setup --browser edge` 打开官方安装页；扩展安装的最终确认、浏览器原生「另存为」弹窗，仍由本人完成。
+
+**发布口径（2026-11-24 起）**：DOM 导出只用于内部开发/临时救急；**对外发布必须走浏览器扩展 + AfterChat**。缺脚本管理器、缺 AfterChat、没登录态、下载目录不可写，一律停止并给出 [docs/00-install-one-click.md](docs/00-install-one-click.md) 里的直达链接，不要继续跑，也不要自建接收后台。
+
+先跑环境检查，`ENV_OK` 才继续；缺件时退出码 1：
+
+```powershell
+python -X utf8 scripts/00_env_check.py --browser edge --dry-run
+python -X utf8 scripts/10_export_gate.py --raw work/raw/afterchat --download-dir "D:\eage下载"
+```
+
+`10_export_gate.py` 没看到真实 `.md`/`.zip` 就返回 `EXPORT_BUTTON_MISSING` 或 `DOWNLOAD_INTERRUPTED`，退出码 1；此时停，不跑 S3。下载收尾崩溃时用 `11_finalize_download.py` 生成 `.md` 副本，不要猜“已经导出成功”。
 
 
 ### S3–S5 三条命令

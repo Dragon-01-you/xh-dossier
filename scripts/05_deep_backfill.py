@@ -313,6 +313,34 @@ def _normalize_text(text: str) -> str:
     return t.lower()
 
 
+PROCESS_TALK_PREFIXES = (
+    "我给你讲一下", "我跟你讲", "我先说", "我补充一下",
+    "那我觉得", "我感觉这里有一点问题", "我现在的理解",
+)
+PROCESS_TALK_SUFFIXES = (
+    "然后再去", "再去真实", "录屏验收", "验收吧", "继续吧", "合并了",
+)
+
+
+def looks_like_process_talk(content: str) -> tuple[bool, str]:
+    """Reject meta-talk / live approval, not durable personal rules.
+
+    Real examples from the AfterChat run:
+    - "我给你讲一下我现在的理解，我感觉这里有一点问题："
+    - "那我觉得可以合并了，然后再去真实的录屏验收吧"
+    Both are process utterances. They may be useful as evidence, but cannot
+    become long-term rules without an if-then criterion and a boundary.
+    """
+    c = content.strip()
+    if c.endswith(("：", ":")):
+        return True, "process_talk:trailing_colon"
+    if len(c) <= 80 and any(c.startswith(p) for p in PROCESS_TALK_PREFIXES):
+        return True, "process_talk:meta_prefix"
+    if len(c) <= 80 and any(c.endswith(s) or s in c for s in PROCESS_TALK_SUFFIXES):
+        return True, "process_talk:live_approval"
+    return False, ""
+
+
 def classify_narrative(content: str) -> tuple[bool, str]:
     """Return (is_personal_experience, reason). Design §4.2.
 
@@ -321,6 +349,9 @@ def classify_narrative(content: str) -> tuple[bool, str]:
     place the cue mid-text (review F3).
     """
     c = content.strip()
+    process_talk, process_reason = looks_like_process_talk(c)
+    if process_talk:
+        return False, process_reason
     if len(c) > 600:
         return False, "non_personal:too_long"
     n = _normalize_text(c)
@@ -464,6 +495,9 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
         ok, _ = classify_narrative(r["content"])
         if not ok:
             continue
+        first_sentence = split_sentences(r["content"])[0] if split_sentences(r["content"]) else ""
+        if first_sentence and looks_like_process_talk(first_sentence)[0]:
+            continue
         text = r["content"]
         if BROAD_META_RE.search(text[:160]):
             continue
@@ -488,6 +522,7 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
             (s.strip() for s in split_sentences(text)
              if 20 <= len(s.strip()) <= 220
              and not BROAD_META_RE.search(s)
+             and not looks_like_process_talk(s)[0]
              and any(c in s for c in signal_cues)),
             "",
         )
@@ -617,7 +652,7 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
 # ---------------------------------------------------------------- outputs
 
 WARNING_BANNER = (
-    "> ⚠️ **二层回流候选 · 全部 [待确认] · 未经本人签字不得写入正式档案。**\n"
+    "> ⚠️ **L2 个人层回流候选 · 不是环境层/项目 bug 层 · 全部 [待确认] · 未经本人签字不得写入正式档案。**\n"
     "> 每条都需本人确认「是否亲历」+ 独立 AI 双尺审查；`needs_llm=true` 表示语义判断未做，不得跳过。\n"
 )
 
@@ -625,7 +660,7 @@ WARNING_BANNER = (
 def render_candidates(candidates: list[L2Candidate], dropped: list[dict[str, str]] | None = None,
                       cross_refs: list[L2Candidate] | None = None) -> str:
     cross_refs = cross_refs or []
-    lines = ["# L2 二层深度回流候选报告", "", WARNING_BANNER,
+    lines = ["# L2 个人层回流候选报告", "", WARNING_BANNER,
              f"> 共 `{len(candidates)}` 条候选（真正 untold；不含 L1 交叉引用）。", ""]
     needs_llm = [d for d in (dropped or []) if d["reason"] == "needs_llm_ambiguous"]
     if needs_llm:

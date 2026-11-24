@@ -2,6 +2,8 @@
 
 > **核心原则：只拿带原文和时间的原件，绝不让 AI 提前摘要覆盖原文。**
 > 所有导出的文件统一放进仓库忽略的 `raw/` 目录（只读底账），绝不提交到 Git。
+>
+> **对外发布口径（2026-11-24 起）**：先装脚本管理器 + AfterChat，再跑导出。缺一件就停，按 [docs/00-install-one-click.md](00-install-one-click.md) 的直达链接补齐；不要因为用户没装就自建后台，也不要把 DOM 兜底写成对外发布路径。
 
 ---
 
@@ -12,7 +14,7 @@
 ### 现有路径（文档级，已核对仓内现状）
 
 1. **首选：AfterChat（工人）+ 脚本管理器（引擎）**：见 §0.1 / §0.4，GreasyFork #589622（扩展安装仍需本人确认；本轮已在 Edge 装好 Tampermonkey 5.5.1 + AfterChat 1.24.2）。
-2. **DOM 兜底（Agent 读 DOM 写盘 / 原生下载）**：见 `docs/fallback-dom-export.md` 与 `prompts/02_dom_export_agent.md`；2026-11-24 真机跑通，零扩展、零另存为。
+2. **DOM 兜底（仅内部开发 / 临时救急，不是对外发布路径）**：见 `docs/fallback-dom-export.md` 与 `prompts/02_dom_export_agent.md`；2026-11-24 真机跑通，零扩展、零另存为，但不能替代扩展安装这一必要步骤。
 3. **同意门禁向导**：`scripts/00_export_wizard.py` / `xh.py export-setup`，未同意不跳转、不下载。
 
 ### 闭环必须满足的真人条件（机器 / Agent 无法代做）

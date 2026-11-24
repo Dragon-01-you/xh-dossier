@@ -323,6 +323,7 @@ def score_kit(
     target_dir: pathlib.Path,
     source_roots: list[pathlib.Path] | None = None,
     thresholds: dict[str, float] | None = None,
+    raw_root: pathlib.Path | None = None,
 ) -> dict[str, object]:
     """Compute decidable quality metrics for a kit.
 
@@ -349,11 +350,22 @@ def score_kit(
     answerable = len(answered) / len(ANSWERABLE_QUESTIONS)
 
     checked: list[tuple[str, str]] = [b for bullets in slot_bullets.values() for b in bullets]
+    raw_root = resolve_raw_root(target_dir, raw_root)
+    raw_text = load_raw_text(raw_root)
     unresolved: list[str] = []
+    raw_zero_hits: list[str] = []
     for file_name, line in checked:
         reason = _verify_pending_source(line, target_dir, source_roots)
         if reason:
             unresolved.append(f"{file_name}: {reason}")
+            continue
+        # Only A-level claims must be exact in the raw export. B-level candidates
+        # may be a first-pass paraphrase; they are reported separately, not failed.
+        if line.startswith("- **A级·访谈") and raw_text:
+            quote = _quote_from_marker(line)
+            if quote and not quote_in_raw(quote, raw_text):
+                raw_zero_hits.append(f"{file_name}: RAW_ZERO_HIT")
+                unresolved.append(f"{file_name}: RAW_ZERO_HIT")
     accuracy = 1.0 if not checked else (len(checked) - len(unresolved)) / len(checked)
     noise_rate = 1.0 - accuracy
 
@@ -376,6 +388,7 @@ def score_kit(
             "value": accuracy, "threshold": th["citation_accuracy"],
             "passed": accuracy >= th["citation_accuracy"],
             "detail": f"引用 {len(checked) - len(unresolved)}/{len(checked)} 可追溯；噪声率 {noise_rate:.2f}"
+                      + (f"；raw 零命中 {len(raw_zero_hits)} 条" if raw_zero_hits else "")
                       + (f"；不可追溯：{'; '.join(unresolved[:3])}" if unresolved else ""),
         },
         "mainline_unique": {
@@ -391,6 +404,7 @@ def score_kit(
         "counts": {slot: len(bullets) for slot, bullets in slot_bullets.items()},
         "missing_slots": missing_slots,
         "unresolved": unresolved,
+        "raw_zero_hits": raw_zero_hits,
     }
 
 
@@ -557,6 +571,46 @@ def _quote_from_marker(line: str) -> str:
     return next((v for v in m.groupdict().values() if v), "").strip()
 
 
+def _normalize_quote(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+
+def resolve_raw_root(kit_dir: pathlib.Path, explicit: pathlib.Path | None = None) -> pathlib.Path | None:
+    """Find the raw export directory used to cross-check A-level quotes."""
+    if explicit:
+        candidate = explicit.expanduser().resolve()
+        return candidate if candidate.is_dir() else None
+    candidates = [
+        kit_dir.parent / "raw",
+        kit_dir.parent.parent / "raw",
+        kit_dir.parent.parent.parent / "raw",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def load_raw_text(raw_root: pathlib.Path | None) -> str:
+    """Concatenate all text-like raw exports; normalized for quote lookup."""
+    if raw_root is None:
+        return ""
+    chunks: list[str] = []
+    for path in sorted(raw_root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".md", ".txt", ".json", ".jsonl"}:
+            continue
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return _normalize_quote("\n".join(chunks))
+
+
+def quote_in_raw(quote: str, raw_text: str) -> bool:
+    normalized = _normalize_quote(quote)
+    return bool(normalized) and normalized in raw_text
+
+
 def _verify_pending_source(
     line: str,
     kit_dir: pathlib.Path,
@@ -629,6 +683,7 @@ def validate_kit(
     source_roots: list[pathlib.Path] | None = None,
     scorecard: bool = True,
     enforce_score: bool = False,
+    raw_root: pathlib.Path | None = None,
 ) -> tuple[bool, list[str]]:
     """Return (passed, diagnostics) checking all 6 kit files under target_dir."""
     diagnostics: list[str] = []
@@ -730,8 +785,13 @@ def validate_kit(
     # Issue #96: decidable scorecard. Advisory by default; `enforce_score` flips
     # the structural pass when a threshold is missed, and names what is missing.
     if scorecard:
-        card = score_kit(target_dir, source_roots)
+        card = score_kit(target_dir, source_roots, raw_root=raw_root)
         diagnostics.extend(format_scorecard(card))
+        if card.get("raw_zero_hits"):
+            diagnostics.append(
+                "RAW_ZERO_HIT: " + "; ".join(card["raw_zero_hits"])
+                + "（A 级原话在 raw 导出里找不到；必须降级或删除，不能继续算 A 级）"
+            )
         if enforce_score and not card["overall_passed"]:
             passed = False
 
@@ -755,6 +815,8 @@ def main() -> int:
         help="额外目录：解析 [待确认] 的 出处：<file>:<line>（可多次传入）",
     )
     parser.add_argument("--no-scorecard", action="store_true", help="skip the issue #96 scorecard")
+    parser.add_argument("--raw-root", type=pathlib.Path, default=None,
+                        help="raw 导出目录；不传则自动找 kit 旁的 work/raw")
     parser.add_argument("--enforce-score", action="store_true",
                         help="flip PASS to FAIL when a scorecard threshold is missed")
     args = parser.parse_args()
@@ -766,6 +828,7 @@ def main() -> int:
         source_roots=args.source_root,
         scorecard=not args.no_scorecard,
         enforce_score=args.enforce_score,
+        raw_root=args.raw_root,
     )
     for m in msgs:
         print(m)
