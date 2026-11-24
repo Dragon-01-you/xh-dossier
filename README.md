@@ -79,7 +79,11 @@ python -X utf8 scripts/99_smoke.py        # 输出 SMOKE_OK 即流水线可用�
 
 #### 机器上没有 Python 怎么办（最低版本 3.11）
 
-本系统核心路径只依赖 Python 标准库，但仍需要一个 **Python 3.11 或更新版本** 的解释器。检测不到 Python 时，`install.ps1` 会直接报失败并给出入口，任选其一装好后重跑即可：
+本系统核心路径只依赖 Python 标准库，但仍需要一个 **Python 3.11 或更新版本** 的解释器。检测不到时，`install.ps1` 会自动下载官方 **Python 3.12.10 embeddable zip** 到 `%LOCALAPPDATA%\XH-Dossier\python`，写入 `python312._pth` 并做 sqlite3 自检；日志里会出现 `DOWNLOAD_OK`、`EXTRACT_OK`、`PTH_OK`、`BOOTSTRAP_OK`。不需要先手工装 Python，也不需要 `py` launcher。
+
+如果机器已有 Python 3.11+，安装器会直接使用它；`-ForceBootstrap` 只用于强制走 bootstrap 分支做验收，不应作为普通安装的默认参数。
+
+只有企业网络/代理阻断 `python.org`、下载失败时，才需要按报错里的入口手工安装后重跑：
 
 - **winget（Windows 自带包管理器，一条命令）**：`winget install Python.Python.3.12`
 - **官网下载页**：https://www.python.org/downloads/  选 Python 3.11 或更新版本；安装第一屏勾选 **Add python.exe to PATH**，再点 Install。
