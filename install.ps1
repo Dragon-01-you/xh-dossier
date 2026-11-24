@@ -45,7 +45,9 @@ if (-not $pyExe) {
     $bootstrap = Join-Path $PSScriptRoot 'bootstrap.ps1'
     if (Test-Path -LiteralPath $bootstrap) {
         Write-Output "PYTHON_MISSING: 尝试用 bootstrap.ps1 下载并安装 Python 3.11+。"
-        $bootstrapOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir "$env:LOCALAPPDATA\XH-Dossier\python" -ScriptsDir (Join-Path $Target 'scripts') 2>&1
+        $bootstrapArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-InstallDir', "$env:LOCALAPPDATA\XH-Dossier\python", '-ScriptsDir', (Join-Path $Target 'scripts'))
+        if ($ForceBootstrap) { $bootstrapArgs += '-Force' }
+        $bootstrapOutput = & powershell.exe @bootstrapArgs 2>&1
         $bootstrapOutput | ForEach-Object { Write-Output $_ }
         $bootCode = $LASTEXITCODE
         $candidate = Join-Path $env:LOCALAPPDATA 'XH-Dossier\python\python.exe'
