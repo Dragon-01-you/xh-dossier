@@ -652,7 +652,7 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
 # ---------------------------------------------------------------- outputs
 
 WARNING_BANNER = (
-    "> ⚠️ **二层回流候选 · 全部 [待确认] · 未经本人签字不得写入正式档案。**\n"
+    "> ⚠️ **L2 个人层回流候选 · 不是环境层/项目 bug 层 · 全部 [待确认] · 未经本人签字不得写入正式档案。**\n"
     "> 每条都需本人确认「是否亲历」+ 独立 AI 双尺审查；`needs_llm=true` 表示语义判断未做，不得跳过。\n"
 )
 
@@ -660,7 +660,7 @@ WARNING_BANNER = (
 def render_candidates(candidates: list[L2Candidate], dropped: list[dict[str, str]] | None = None,
                       cross_refs: list[L2Candidate] | None = None) -> str:
     cross_refs = cross_refs or []
-    lines = ["# L2 二层深度回流候选报告", "", WARNING_BANNER,
+    lines = ["# L2 个人层回流候选报告", "", WARNING_BANNER,
              f"> 共 `{len(candidates)}` 条候选（真正 untold；不含 L1 交叉引用）。", ""]
     needs_llm = [d for d in (dropped or []) if d["reason"] == "needs_llm_ambiguous"]
     if needs_llm:
