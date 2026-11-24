@@ -6,7 +6,7 @@
 ## Context
 
 基线 build 链路只有 raw → index → match → bootstrap → backfill → validate，
-6 轮访谈答案落盘到 `work/interview/` 后没有任何下游脚本消费（Gate 0 ISSUE-011/018）。
+6 个阶段访谈答案落盘到 `work/interview/` 后没有任何下游脚本消费（Gate 0 ISSUE-011/018）。
 由此带来两个缺口：
 
 1. 没有定义访谈答案与 raw 机器抽取候选的优先级；
@@ -18,7 +18,7 @@
 
 | 等级 | 通道 | 含义 | 能否作为事实定论 |
 |---|---|---|---|
-| **A 级 · 访谈** | `work/interview/answers.md` + `round-N.md` 中本人复述确认的答案 | 基准事实 | 可作为本人确认答案；仍需保留原文与出处行 |
+| **A 级 · 访谈** | `work/interview/answers.md` + `stage-N.md`（兼容 `round-N.md`） 中本人复述确认的答案 | 基准事实 | 可作为本人确认答案；仍需保留原文与出处行 |
 | **B 级 · raw 回填** | 从聊天记录机器抽取的候选 | 补证 / 候选归纳 | 只能当候选，不能改写成身份定论 |
 | **C 级 · L2 待确认** | 二层回流候选 | 未签字提案 | 只能向本人提问，不得自行补全 |
 
@@ -28,7 +28,7 @@
   **B 级 raw** 条目排在其后，只作补证。
 - 访谈条目永远不会被 raw 条目覆盖：即使 raw 池抽不出对应内容，A 级访谈块仍独立成段。
 - 每条访谈条目带可追溯出处：`_evidence/interview-lines.md:<行>`（仓内副本）
-  + `来源：<answers.md|round-N.md>:<行>`（原始文件与行号）。
+  + `来源：<answers.md|stage-N.md>:<行>`（原始文件与行号）。
 
 ### 3. 冲突处理（不允许静默覆盖）
 

@@ -246,7 +246,7 @@ def init(args: argparse.Namespace) -> int:
     print("copied:", ", ".join(copied) if copied else "(already populated)")
     print("说明：work/kit 现在是空白模板，里面的 <...> 还没填。")
     print("这时直接跑 validate --strict 会报占位符，这不是安装失败。")
-    print("下一步：把聊天记录放进 work/raw 后跑 build；或先做 6 轮访谈，再校验。")
+    print("下一步：把聊天记录放进 work/raw 后跑 build；或先做 6 个阶段访谈，再校验。")
     print("receipt:", path)
     return 0
 
@@ -614,7 +614,7 @@ def main() -> int:
     p.add_argument("--db", default=str(WORK / "unified_index.db"))
     p.add_argument("--out", default=str(WORK / "kit"))
     p.add_argument("--interview", "--answers", dest="interview", default=None,
-                   help="访谈目录（answers.md + round-N.md）或单个 answers.md")
+                   help="访谈目录（answers.md + stage-N.md；兼容 round-N.md）或单个 answers.md")
     p.set_defaults(func=bootstrap)
 
     p = sub.add_parser("build", help="one-command: raw -> index -> 6 drafts -> L2 proposal -> validate")
@@ -625,7 +625,7 @@ def main() -> int:
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
     p.add_argument("--query", default="项目", help="keyword used for the final FTS recall step")
     p.add_argument("--interview", "--answers", dest="interview", default=None,
-                   help="访谈目录（answers.md + round-N.md）或单个 answers.md；"
+                   help="访谈目录（answers.md + stage-N.md；兼容 round-N.md）或单个 answers.md；"
                         "访谈答案作为 A 级基准入稿，raw 回填只作补证")
     p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
     p.add_argument("--apply-unsigned", dest="apply_unsigned", action="store_true", default=True,

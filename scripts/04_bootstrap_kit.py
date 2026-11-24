@@ -469,14 +469,15 @@ def _build_interview_evidence(bundle: INTERVIEW.InterviewBundle, path: pathlib.P
     """Copy sourced interview lines into the kit evidence digest.
 
     The kit bullet cites the digest line so a reviewer can open the copied
-    line and trace it back to ``answers.md`` / ``round-N.md`` (original file +
-    line kept in the bullet's `来源` field).
+    line and trace it back to ``answers.md`` / ``stage-N.md`` (legacy
+    ``round-N.md`` also accepted); the original file + line is kept in the
+    bullet's `来源` field).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# 访谈 A 级证据行（只读）",
         "",
-        "> 每行一条访谈答案；编号供六份档案「出处」列核对。原文来自 work/interview 的 answers.md / round-N.md。",
+        "> 每行一条访谈答案；编号供六份档案「出处」列核对。原文来自 work/interview 的 answers.md / stage-N.md（兼容 round-N.md）。",
         "",
     ]
     for i, fact in enumerate(bundle.facts, start=1):
@@ -491,7 +492,7 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
     interview_note = ""
     if bundle and not bundle.is_empty():
         interview_note = (
-            f"\n- **访谈 A 级**：{len(bundle.facts)} 条本人在 6 轮访谈中确认的答案"
+            f"\n- **访谈 A 级**：{len(bundle.facts)} 条本人在 6 个阶段访谈中确认的答案"
             f"（来源：{', '.join(bundle.source_files)}），见 `_evidence/interview-lines.md`。"
             "访谈答案是基准，raw 回填只能补证，不得覆盖。\n"
         )
@@ -510,7 +511,7 @@ def _agent_md(db_path: pathlib.Path, records: list[Record], sources: list[tuple[
 
 ## 二、事实等级（必须遵守）
 
-- **A 级 · 访谈**：本人在 6 轮访谈中明确确认的答案；带访谈原文与 `answers.md` / `round-N.md` 出处。是基准，其他来源不得覆盖。{interview_note}
+- **A 级 · 访谈**：本人在 6 个阶段访谈中明确确认的答案；带访谈原文与 `answers.md` / `stage-N.md`（兼容 `round-N.md`）出处。是基准，其他来源不得覆盖。{interview_note}
 - **A 级 · 原话**：有 `原文` + `出处`，而且能在 `_evidence/chat-lines.md` 的对应行找到原句。可以当作“本人说过”。
 - **B 级 · raw 回填**：由多条原话归纳出的主题/主线。只能当“候选归纳”，不能当身份定论；与访谈 A 级冲突时标 `[待确认]`，由本人裁定。
 - **C 级 · L2 待确认**：写作 `[待确认]` 的二层回流条目。只能向本人提问，不得自行补全。
@@ -929,7 +930,7 @@ def main() -> int:
     ap.add_argument("--out", default=pathlib.Path("work/kit"), type=pathlib.Path)
     ap.add_argument("--interview", "--answers", dest="interview", default=None,
                     type=pathlib.Path,
-                    help="访谈目录（含 answers.md 与 round-N.md）或单个 answers.md；"
+                    help="访谈目录（含 answers.md 与 stage-N.md；兼容 round-N.md）或单个 answers.md；"
                          "访谈答案作为 A 级基准入稿，raw 回填只作补证")
     args = ap.parse_args()
     try:

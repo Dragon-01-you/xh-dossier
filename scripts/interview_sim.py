@@ -7,8 +7,8 @@
 喂给直接解析自 SKILL.md 的题库，校验三件事：
 
 1. 每道封闭选择题都带一个显式自定义 / 可补充位（题末项）；
-2. 用户选自定义位时必须带原话，原话被逐字采纳并进本轮对应的产出文件；
-3. 从第 2 轮起滚动采集的正例 / 反例，最终汇总进 ``04-正反例避坑账.md``。
+2. 用户选自定义位时必须带原话，原话被逐字采纳并进本阶段对应的产出文件；
+3. 从第 2 个阶段起滚动采集的正例 / 反例，最终汇总进 ``04-正反例避坑账.md``。
 
 成功输出 ``SIM_OK``（exit 0）；可预期错误给人话提示 + ``SIM_FAIL``（exit 2），
 不把 traceback 丢给用户。纯标准库，无第三方依赖。
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SKILL_PATH = REPO_ROOT / "skills" / "onboarding-interviewer" / "SKILL.md"
 
-ROUND_RE = re.compile(r"^###\s*第\s*(\d+)\s*轮题库\s*→\s*`([^`]+)`")
+ROUND_RE = re.compile(r"^###\s*第\s*(\d+)\s*(?:轮|阶段)题库\s*→\s*`([^`]+)`")
 QUESTION_RE = re.compile(r"^(\d+)\.\s*\*\*(.+?)\*\*")
 OPTION_RE = re.compile(r"^\s+-\s*`([A-Z])`\s+(.+?)\s*$")
 CUSTOM_KEYWORDS = ("自定义", "可补充", "手填", "可手写")
@@ -88,7 +88,7 @@ def _is_custom_option(text: str) -> bool:
 
 
 def parse_question_bank(skill_text: str) -> list[Round]:
-    """Parse the 6-round question bank out of SKILL.md.
+    """Parse the 6-stage question bank out of SKILL.md.
 
     Closed questions have ``- `X` ...`` option lines; questions whose body is
     only an italic open prompt are treated as open questions.
@@ -129,7 +129,7 @@ def parse_question_bank(skill_text: str) -> list[Round]:
             continue
 
     if len(rounds) != 6:
-        raise SimError(f"题库解析异常：应解析出 6 轮，实际 {len(rounds)} 轮。")
+        raise SimError(f"题库解析异常：应解析出 6 个阶段，实际 {len(rounds)} 个。")
     return rounds
 
 
@@ -142,13 +142,13 @@ def _validate_bank_contract(rounds: list[Round]) -> None:
             if q.custom_option is None:
                 letters = "/".join(o.letter for o in q.options)
                 raise SimError(
-                    f"第 {rnd.index} 轮题 {q.index} 缺少自定义 / 可补充位"
+                    f"第 {rnd.index} 个阶段题 {q.index} 缺少自定义 / 可补充位"
                     f"（现有选项：{letters}）。"
                 )
 
 
 def run_interview(skill_text: str, transcript: dict) -> dict:
-    """Drive the 6-round interview against a scripted transcript.
+    """Drive the 6-stage interview against a scripted transcript.
 
     Returns a result dict with per-round records, rendered kit files, and the
     collected cases. Raises :class:`SimError` on any contract violation.
@@ -156,9 +156,9 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
     rounds = parse_question_bank(skill_text)
     _validate_bank_contract(rounds)
 
-    t_rounds = transcript.get("rounds")
+    t_rounds = transcript.get("stages") or transcript.get("rounds")
     if not isinstance(t_rounds, list) or len(t_rounds) != 6:
-        raise SimError(f"transcript 必须包含 6 轮回答，实际 {len(t_rounds) if isinstance(t_rounds, list) else '非列表'}。")
+        raise SimError(f"transcript 必须包含 6 个阶段回答，实际 {len(t_rounds) if isinstance(t_rounds, list) else '非列表'}。")
 
     records: list[dict] = []
     collected_cases: list[dict] = []
@@ -174,14 +174,14 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
         identity = str(t_round.get("identity", "")).strip()
         if identity and identity not in IDENTITY_BRANCHES:
             raise SimError(
-                f"第 {bank_round.index} 轮身份分支「{identity}」不在已知分支 "
+                f"第 {bank_round.index} 个阶段身份分支「{identity}」不在已知分支 "
                 f"{sorted(IDENTITY_BRANCHES)} 中。"
             )
 
         product_gate = str(t_round.get("product_gate", "ok")).strip() or "ok"
         if product_gate not in PRODUCT_GATES:
             raise SimError(
-                f"第 {bank_round.index} 轮产物门禁「{product_gate}」须为 "
+                f"第 {bank_round.index} 个阶段产物门禁「{product_gate}」须为 "
                 f"{sorted(PRODUCT_GATES)}。"
             )
 
@@ -193,9 +193,9 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
         if identity:
             round_lines.append(f"- 身份分支：{identity}")
         if carryover:
-            round_lines.append(f"- 带入上一轮要点：{carryover}")
+            round_lines.append(f"- 带入上一阶段要点：{carryover}")
         if product_gate == "reask":
-            round_lines.append("- 产物门禁：本轮目标产物未拿全，已基于本轮回答重问一次")
+            round_lines.append("- 产物门禁：本阶段目标产物未拿全，已基于本阶段回答重问一次")
 
         for question in bank_round.questions:
             ans = answers.get(question.index)
@@ -214,7 +214,7 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
             option = next((o for o in question.options if o.letter == choice), None)
             if option is None:
                 raise SimError(
-                    f"第 {bank_round.index} 轮题 {question.index}：选项 {choice or '（空）'} "
+                    f"第 {bank_round.index} 个阶段题 {question.index}：选项 {choice or '（空）'} "
                     f"不在题库 {[o.letter for o in question.options]} 中。"
                 )
 
@@ -223,11 +223,11 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
                 custom = str(ans.get("custom", "")).strip()
                 if not custom:
                     raise SimError(
-                        f"第 {bank_round.index} 轮题 {question.index}：选了自定义位 {choice}，"
+                        f"第 {bank_round.index} 个阶段题 {question.index}：选了自定义位 {choice}，"
                         "但没有填写自填原话（custom 为空）。"
                     )
                 adopted_customs.append(custom)
-                line += f"\n  - 自定义原话（逐字采纳进本轮档案）：{custom}"
+                line += f"\n  - 自定义原话（逐字采纳进本阶段档案）：{custom}"
             round_lines.append(line)
             closed_summary.append(
                 f"题{question.index} 选 {choice}"
@@ -236,14 +236,14 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
 
         cases = t_round.get("cases", [])
         if not isinstance(cases, list):
-            raise SimError(f"第 {bank_round.index} 轮 cases 必须是列表。")
+            raise SimError(f"第 {bank_round.index} 个阶段 cases 必须是列表。")
         positive = negative = 0
         for case in cases:
             kind = case.get("kind")
             text = str(case.get("text", "")).strip()
             if kind not in ("positive", "negative") or not text:
                 raise SimError(
-                    f"第 {bank_round.index} 轮案例格式错误：kind 须为 positive/negative 且 text 非空。"
+                    f"第 {bank_round.index} 个阶段案例格式错误：kind 须为 positive/negative 且 text 非空。"
                 )
             collected_cases.append({"round": bank_round.index, "kind": kind, "text": text})
             if kind == "positive":
@@ -253,7 +253,7 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
 
         notes = str(t_round.get("notes", "")).strip()
         if notes:
-            round_lines.append(f"- 本轮补充说明：{notes}")
+            round_lines.append(f"- 本阶段补充说明：{notes}")
 
         kit_lines[bank_round.target_file].extend(round_lines)
         records.append(
@@ -278,9 +278,9 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
         header = f"# {fname}（脚本层模拟访谈产出）\n"
         if fname == "04-正反例避坑账.md":
             body = ["## 一、正例 · 确实管用必须保留的做法"]
-            body += [f"- [第 {c['round']} 轮] {c['text']}" for c in positives] or ["- （本轮模拟未采集到正例）"]
+            body += [f"- [第 {c['round']} 个阶段] {c['text']}" for c in positives] or ["- （本阶段模拟未采集到正例）"]
             body.append("\n## 二、反例 · 一犯再犯必须当场喊停的坑")
-            body += [f"- [第 {c['round']} 轮] {c['text']}" for c in negatives] or ["- （本轮模拟未采集到反例）"]
+            body += [f"- [第 {c['round']} 个阶段] {c['text']}" for c in negatives] or ["- （本阶段模拟未采集到反例）"]
             kit[fname] = header + "\n".join(body) + "\n"
         else:
             kit[fname] = header + "\n".join(lines) + "\n"
@@ -291,7 +291,7 @@ def run_interview(skill_text: str, transcript: dict) -> dict:
 def _print_report(result: dict) -> None:
     for rec in result["records"]:
         print(
-            f"第 {rec['round']} 轮 -> {rec['target_file']} | "
+            f"第 {rec['round']} 个阶段 -> {rec['target_file']} | "
             f"自定义采纳 {len(rec['adopted_customs'])} 条 | "
             f"正例 {rec['positive']} / 反例 {rec['negative']}"
         )
@@ -305,7 +305,7 @@ def _print_report(result: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="脚本层 6 轮访谈模拟器（验收 Issue #1/#3 修复）。")
+    parser = argparse.ArgumentParser(description="脚本层 6 阶段访谈模拟器（验收 Issue #1/#3 修复）。")
     parser.add_argument("--transcript", required=True, type=pathlib.Path, help="脚本化访谈 JSON")
     parser.add_argument("--out", required=True, type=pathlib.Path, help="模拟产出 6 份档案的目录")
     parser.add_argument("--root", type=pathlib.Path, default=REPO_ROOT, help="仓库根目录")

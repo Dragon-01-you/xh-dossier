@@ -768,7 +768,7 @@ def main() -> int:
     if not ok and any(m.startswith("UNFILLED") for m in msgs):
         print(
             "NOTE: 以上 UNFILLED 占位符来自「还没填的空白模板」，不是安装失败。"
-            "下一步：把聊天记录放进 work/raw 跑 build，或先完成 6 轮访谈填完模板，再重跑本校验；"
+            "下一步：把聊天记录放进 work/raw 跑 build，或先完成 6 个阶段访谈填完模板，再重跑本校验；"
             "语义提示同理，按「需访谈」处理或补原话。"
         )
     print("VALIDATE_OK" if ok else "VALIDATE_FAIL")

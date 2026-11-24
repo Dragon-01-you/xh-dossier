@@ -1,6 +1,6 @@
 # XH-Dossier · 跨平台 AI 入职说明书全流程开源包
 
-> 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。  
+> 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。
 > 适用于 **任何本地 Agent**（Antigravity / Claude Code / Codex / Cursor / Hermes）以及 **网页端对话模型**（豆包 / DeepSeek / ChatGPT / Kimi）。
 
 [![CI](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml/badge.svg)](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml)
@@ -35,12 +35,12 @@
 ```
 
 ### Stage 1：结构化访谈立底盘（先人拍板，再查旧账）
-- **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，每次 3 个问题，**6 轮**生成初稿（6 轮分别对应 `AGENTS.md` + `00~04` 六份文件）。
-- **网页端用户**：复制 [prompts/01_web_ai_interviewer.md](prompts/01_web_ai_interviewer.md) 里的 10 行提示词直接发给豆包 / DeepSeek。
+- **本地 Agent 用户**：加载 [skills/onboarding-interviewer/SKILL.md](skills/onboarding-interviewer/SKILL.md)，按 **6 个阶段**推进；每个阶段先问 2–3 个种子问题，拿到该阶段目标才进下一阶段（6 个阶段分别对应 `AGENTS.md` + `00~04` 六份文件）。
+- **网页端用户**：复制 [prompts/01_web_ai_interviewer.md](prompts/01_web_ai_interviewer.md) 里的完整提示词直接发给豆包 / DeepSeek / GLM。
 
 ### Stage 2：多平台聊天记录导出（内置 ScriptCat 脚本猫向导 + 开关避坑）
-详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。  
-**⚠️ 装扩展只是装了「引擎」，还必须装一个「导出脚本」才干活**：多平台推荐 **AfterChat**（GreasyFork #589622，约 30 平台），单平台备选见指南里的「按平台选脚本」表。另一个高频坑是浏览器的「下载前询问保存位置」——导出跑完会弹系统「另存为」窗口，需本人点保存，否则进度看似卡住、文件不落地。  
+详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。
+**⚠️ 装扩展只是装了「引擎」，还必须装一个「导出脚本」才干活**：多平台推荐 **AfterChat**（GreasyFork #589622，约 30 平台），单平台备选见指南里的「按平台选脚本」表。另一个高频坑是浏览器的「下载前询问保存位置」——导出跑完会弹系统「另存为」窗口，需本人点保存，否则进度看似卡住、文件不落地。
 **网络退路**：浏览器商店、scriptcat.org 或 GreasyFork 打不开 / 超时时，引擎 ScriptCat 可直连 GitHub 开源发布页下载压缩包（向导加 `--download-release`）；按平台与场景的主路径 / 备选路径见指南「网络场景退路」一节。
 **⚠️ 浏览器开关最容易卡住的一步**：
 1. 打开浏览器扩展管理页（`chrome://extensions` 或 `edge://extensions`）→ 打开右上角 **「开发者模式」**；
@@ -95,7 +95,7 @@ python -X utf8 scripts/99_smoke.py        # 输出 SMOKE_OK 即流水线可用�
 
 ### 3.0.1 `init` 之后 `work/kit` 是空白模板，`--strict` 报错属正常
 
-`init` 只会把 6 份空白模板复制到 `work/kit/`，里面的 `<...>` 占位符还没填。这时直接跑 `validate --strict` 会报占位符，**这不是安装失败**。下一步：把聊天记录放进 `work/raw/` 后跑 `build`，或先完成 6 轮访谈，再做严格校验。
+`init` 只会把 6 份空白模板复制到 `work/kit/`，里面的 `<...>` 占位符还没填。这时直接跑 `validate --strict` 会报占位符，**这不是安装失败**。下一步：把聊天记录放进 `work/raw/` 后跑 `build`，或先完成 6 个阶段访谈，再做严格校验。
 
 `99_smoke.py` 会在系统临时目录跑通 `01 → 02 → 03` 最小样例，不污染仓库 `work/`，输出 `SMOKE_OK` 即表示清洗、匹配、校验三段流水线都可用。
 

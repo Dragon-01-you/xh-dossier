@@ -64,7 +64,7 @@ def test_custom_slot_on_every_closed_question_all_rounds():
             closed_count += 1
             assert q.custom_option is not None, f"第 {rnd.index} 轮题 {q.index} 缺自定义位"
             assert q.custom_option.letter == q.options[-1].letter
-    # 题库共 6 轮 × 3 题，其中开放题 4 道（R3Q1、R5Q2、R6Q1、R6Q2）。
+    # 题库共 6 阶段 × 3 个种子问题，其中开放题 4 道（R3Q1、R5Q2、R6Q1、R6Q2）。
     assert closed_count == 14
 
 
@@ -82,12 +82,12 @@ def test_rounds_2_to_6_each_have_explicit_custom_slot():
 # ---------------------------------------------------------------------------
 
 def test_early_case_collection_in_rounds_2_to_4():
-    sections = re.split(r"### 第 \d 轮题库", skill)
-    # sections[0] 为前言，sections[1..6] 对应第 1~6 轮。
+    sections = re.split(r"### 第 \d (?:轮|阶段)题库", skill)
+    # sections[0] 为前言，sections[1..6] 对应阶段 1~6。
     for round_no in (2, 3, 4):
-        assert "正反例滚动账" in sections[round_no], f"第 {round_no} 轮缺滚动正反例采集位"
-    assert "从第 2 轮起" in skill
-    assert "从第 2 轮起" in prompt
+        assert "正反例滚动账" in sections[round_no], f"阶段 {round_no} 缺滚动正反例采集位"
+    assert "从第 2 个阶段起" in skill
+    assert "从第 2 个阶段起" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ def test_simulator_merges_round_1_to_3_cases_into_final_kit():
     for text in early_texts:
         assert text in kit04, f"前 3 轮采集的案例未进入最终 04 档案：{text}"
     # 案例带来源轮次标注。
-    assert "[第 1 轮]" in kit04 and "[第 2 轮]" in kit04 and "[第 3 轮]" in kit04
+    assert "[第 1 个阶段]" in kit04 and "[第 2 个阶段]" in kit04 and "[第 3 个阶段]" in kit04
 
 
 def test_simulator_rejects_custom_choice_without_text():
@@ -214,8 +214,8 @@ def test_every_round_has_custom_option():
 
 
 def test_open_example_slot_every_round():
-    assert "每轮末尾的开放位" in skill
-    assert "不要把所有正反例采集都压到第 6 轮" in skill
+    assert "每阶段末尾的开放位" in skill
+    assert "不要把所有正反例采集都压到第 6 阶段" in skill
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +236,9 @@ def test_history_narrative_entry_in_skill_and_prompt():
 # ---------------------------------------------------------------------------
 
 def test_product_gate_and_context_carryover_in_skill_and_prompt():
-    for token in ("重问", "上一轮", "产物门禁"):
+    for token in ("重问", "上一阶段", "产物门禁"):
         assert token in skill, f"SKILL.md 缺门禁/带入规则：{token}"
-    assert "上一轮" in prompt and "重问" in prompt
+    assert "上一阶段" in prompt and "重问" in prompt
 
 
 def test_sim_records_carryover_and_reask_gate():
@@ -249,7 +249,7 @@ def test_sim_records_carryover_and_reask_gate():
     by_round = {rec["round"]: rec for rec in result["records"]}
 
     assert by_round[2]["carryover"] == "上一轮定了严谨合伙人站位"
-    assert "带入上一轮要点" in result["kit"]["00-总入口索引.md"]
+    assert "带入上一阶段要点" in result["kit"]["00-总入口索引.md"]
     assert by_round[3]["product_gate"] == "reask"
     assert "产物门禁" in result["kit"]["01-身份与当前主线.md"]
 

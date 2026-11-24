@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 INTERVIEW = importlib.import_module("interview_source")
 BOOTSTRAP = importlib.import_module("04_bootstrap_kit")
 
-ANSWERS_MD = """# 6 轮访谈记录
+ANSWERS_MD = """# 6 个阶段访谈记录
 
 ## 汇总
 
@@ -30,7 +30,7 @@ ANSWERS_MD = """# 6 轮访谈记录
 - 反例：输出听不懂的内容；过度依赖 AI 没学到东西
 """
 
-ROUND_1_MD = """# 第 1 轮
+ROUND_1_MD = """# 第 1 阶段
 
 ### 用户原话（逐条）
 1. 角色定位：我希望你成为一个严谨的合伙人。

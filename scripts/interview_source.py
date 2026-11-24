@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """Stage 3.5 interview source loader (E3-T1 / issue #88, E3-T2 / issue #89).
 
-The 6-round interview answers used to land in ``work/interview/`` but no
+The 6-stage interview answers used to land in ``work/interview/`` but no
 downstream script consumed them. This module turns ``answers.md`` and
-``round-*.md`` into structured **A-level facts**, each carrying the exact
+``stage-*.md`` (legacy ``round-*.md`` also accepted) into structured **A-level
+facts**, each carrying the exact
 source file and line so a kit bullet can be traced back to the interview.
 
 Priority rule (implemented here and documented in docs/adr/0002):
@@ -59,7 +60,7 @@ RULE_VERB_RE = re.compile(r"(确认|同意|不要|禁止|不许|必须|绝不|�
 PRINCIPLE_CODE_RE = re.compile(r"^\s*(?P<code>\d[A-Z])\s*[（(](?P<text>.+)[）)]\s*$")
 BULLET_RE = re.compile(r"^\s*[-*]\s*(?P<label>[^：:]+)[：:]\s*(?P<value>.+)$")
 NUMBERED_RE = re.compile(r"^\s*\d+[.、)）]\s*(?P<label>[^：:：]+)[：:]\s*(?P<value>.+)$")
-ROUND_FILE_RE = re.compile(r"round[-\s]?(\d+)\.md$", re.IGNORECASE)
+ROUND_FILE_RE = re.compile(r"(?:round|stage)[-\s]?(\d+)\.md$", re.IGNORECASE)
 
 # Clauses that are product complaints about the interviewer itself, not
 # durable facts about the user. They must not be lifted into the kit.
@@ -257,8 +258,9 @@ def load_interview(path: pathlib.Path | str | None) -> InterviewBundle:
     """Load interview answers from a directory or a single answers.md file.
 
     Accepts:
-    - a directory containing ``answers.md`` and/or ``round-1.md`` … ``round-6.md``;
-    - a single ``answers.md`` (or any ``round-N.md``) file.
+    - a directory containing ``answers.md`` and/or ``stage-1.md`` … ``stage-6.md``;
+      legacy ``round-1.md`` … ``round-6.md`` is also accepted;
+    - a single ``answers.md`` (or any ``stage-N.md`` / ``round-N.md``) file.
 
     Returns an empty bundle when ``path`` is None or missing; callers treat
     that as "no interview input", matching the pre-#88 behaviour.
@@ -277,11 +279,11 @@ def load_interview(path: pathlib.Path | str | None) -> InterviewBundle:
         answers = root / "answers.md"
         if answers.is_file():
             files.append(answers)
-        rounds = sorted(
-            (p for p in root.glob("round-*.md") if ROUND_FILE_RE.search(p.name)),
+        stages = sorted(
+            (p for p in root.iterdir() if p.is_file() and ROUND_FILE_RE.search(p.name)),
             key=lambda p: int(ROUND_FILE_RE.search(p.name).group(1)),
         )
-        files.extend(rounds)
+        files.extend(stages)
         if not files:
             files = sorted(root.glob("*.md"))
 

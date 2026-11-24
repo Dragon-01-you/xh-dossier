@@ -25,7 +25,7 @@ python -X utf8 scripts/xh.py init
 会在 `work/` 建：
 
 - `raw/`：只读原始导出，别让模型改写
-- `interview/`：6 轮访谈原始回答
+- `interview/`：6 个阶段访谈原始回答
 - `kit/`：6 份档案草稿
 - `reports/`、`evidence/`
 
@@ -75,7 +75,7 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
 
 ```text
 S0 doctor
-S1 访谈 6 轮 → work/interview + work/kit
+S1 访谈 6 个阶段 → work/interview + work/kit
 S2 浏览器导出 → work/raw
 S3 ingest → work/unified_index.db
 S4 match → work/backfill_candidates.md
@@ -88,7 +88,7 @@ S7 verify → 交付
 
 ### S1 访谈
 
-读 `skills/onboarding-interviewer/SKILL.md`，6 轮、每轮 3 题；不要替用户编答案。每轮把回答写进 `work/interview/round-N.md`，再生成 `work/kit/` 的 6 份草稿。
+读 `skills/onboarding-interviewer/SKILL.md`，按 6 个阶段推进；每个阶段先问 2–3 个种子问题，拿到该阶段目标才进下一阶段，不按固定 3 题硬切。不要替用户编答案。每阶段把回答写进 `work/interview/stage-N.md`（兼容旧 `round-N.md`），再生成 `work/kit/` 的 6 份草稿。
 
 ### S2 导出
 
