@@ -223,10 +223,44 @@ PASTED_MATERIAL_TOKENS = (
 )
 
 
+# Issue #130: Pasted prompt templates / persona cards / spec headers aimed at AI.
+PROMPT_TEMPLATE_RE = re.compile(
+    r"(?:^(?:产品哲学|核心原则|设计哲学|系统原则|通用规则|角色设定|工作流规则|输出规范|提示词模板|评判标准)\s*[:：(（]"
+    r"|^(?:要求|任务要求|注意|限制)\s*[:：]\s*\d+[.、)）]"
+    r"|【(?:核心原则|角色设定|系统提示|输出规范|硬性要求|工作原则|提示词)】"
+    r"|(?:^|[，,。；;\s])(?:你是一位|你是一个|你是一名|你是.{0,12}(?:智能体|助手|专家|委员|顾问|架构师|设计师|老师|工程师)|你输出的所有内容必须)"
+    r"|(?:^|\s)规则[一二三四五六七八九十\d]+\s*[:：])"
+)
+# Issue #130: Single-turn continuation or ephemeral task directives, not durable rules.
+ONE_TURN_DIRECTIVE_RE = re.compile(
+    r"(?:继续上面|接着上面|继续刚才|接着刚才|不要从新开始|不要重新开始|上面没(?:有)?完成的"
+    r"|(?:我觉得这里(?:的话)?|这里的话|这个地方(?:的话)?).{0,12}(?:可以不要|不要了|先不要|去掉|删掉)"
+    r"|这[一二两三四五六七八九十\d]+(?:张|个|份|页|条|块|段).{0,8}(?:必须|不要|不能)"
+    r"|关于解决(?:用户|这个)的问题[,，]?\s*不能"
+    r"|我这里叫你|这里不要取信|考你的(?:设计|能力|审美)"
+    r"|渲染网格|网格数(?:必须)?固定为|像素大小)"
+)
+
+
+def principle_shape(text: str) -> tuple[bool, str]:
+    """Return (is_personal_principle, reject_reason) for a candidate principle sentence."""
+    if PROMPT_TEMPLATE_RE.search(text):
+        return False, "prompt-template"
+    if ONE_TURN_DIRECTIVE_RE.search(text):
+        return False, "one-turn-directive"
+    if DIALOGUE_ADDRESSED_RE.search(text):
+        return False, "dialogue-addressed"
+    return True, ""
+
+
 def rule_shape(text: str) -> tuple[bool, str]:
     """Return (is_durable_rule, reject_reason) for a candidate rule sentence."""
     if not RULE_VERB_RE.search(text):
         return False, "no-rule-verb"
+    if PROMPT_TEMPLATE_RE.search(text):
+        return False, "prompt-template"
+    if ONE_TURN_DIRECTIVE_RE.search(text):
+        return False, "one-turn-directive"
     if TECH_EXCERPT_RE.search(text):
         return False, "technical-excerpt"
     if SINGLE_TASK_RE.search(text):

@@ -71,6 +71,18 @@ INDEX_OK ... -> FOUR_WAY_OK ... -> BOOTSTRAP_OK ... -> L2_BACKFILL_OK candidates
    build 回执与档案旁的 `_evidence/review.json` 初始状态都是 `pending_review`；
    没跑这一步，`verify` 与 S7 三问盲测会被阻断，并提示先复核，Agent 不能自行代签。
 
+## 2.5 每步流程意图与允许兜底边界
+
+接手 Agent 不要机械盲跑命令；执行前先看清每一步的**设计目标**、**允许的轻量兜底范围**，以及**何时必须停手问人**：
+
+| 阶段 | 设计目标 | 预期产物 | 允许 Agent 兜底的微小偏差 | 必须停手问人的红线 |
+|---|---|---|---|---|
+| 1. 冷库入库（`ingest`） | 只读吸收多平台导出并去重、建 FTS5 索引 | `unified_index.db`（`INDEX_OK`） | 压缩包需先解压到系统临时目录再传 `--raw`；解释器按 `py`/`python`/`python3` 自动切换 | 原始导出目录为空、下载中断或疑似混入他人聊天记录 |
+| 2. L1 访谈校准与初稿（`bootstrap`） | 把本人确认的访谈立为 A 级基准，再从聊天抽 B 级补证 | 6 份初稿 + `_evidence/` + `build_summary.md` | 访谈为预填卡或 `answers.md`/`stage-N.md` 均可自动吸收；raw 样本薄时诚实保留“需访谈” | 显式传入访谈却报 `INTERVIEW_WARN` 解析为 0 条；或访谈与 raw 冲突需本人裁决 |
+| 3. L2 差集挖掘（`backfill`） | 找出 6 份档案尚未覆盖的本人遗漏经验与复盘 | `layer2/l2_candidates.md` + 待确认补丁区 | 可开 `--broad` 扩大未覆盖陈述召回；所有结果仅放未签字待确认区 | 任何涉及 `--apply-signed --confirm` 改写正式正文的操作（严禁代签） |
+| 4. 时间线与图检索（`retrieval`） | 提供双时态与实体关系辅助查账，不替代 6 份档案 | `entities`/`relations` 表 + 召回清单 | 缺失日期保留 `unknown` 不猜；可选 `--skip-retrieval` 先看 L1/L2 质量 | 把 `assistant` 独白或未经 `rec_id + quote` 验真的推断塞进正式档案 |
+| 5. 严格验收与复核（`validate` / `review`） | 验证出处存在、无水话/PII/空占位符并输出阶段转化摘要 | `VALIDATE_OK` + `PIPELINE_SUMMARY` | 先读 `build_summary.md` 确认每步“输入 → 过滤 → 产出”是否合理，再清理误入草稿 | `RAW_ZERO_HIT`、无法解释的缺失出处，或 `review --confirm` 本人签字动作 |
+
 ## 3. 真实全流程（推荐顺序）
 
 ```text
