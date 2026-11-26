@@ -417,6 +417,11 @@ AI_HELP_START_RE = re.compile(
     r"^(?:请问|帮我看看|帮我讲一下|帮我解释|请帮我|我想问|能否帮我|你可以看一下|能不能帮|为什么|怎么修|怎么解决)"
 )
 PASTED_DOC_MARKERS = ("采集日期：", "采集日期:", "信源体系：", "信源体系:", "参考文献", "全文如下")
+_LICENSE_SPEC_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:BSD-[23]|Apache-?2(?:\.0)?|GPLv?[23]?|LGPL|AGPL|OFL|MPL-2\.0)(?![A-Za-z0-9])"
+)
+_TECH_SPEC_CUES = ("⚠", "✅", "❌", "HTML/CSS", "SVG", "设计 token", "渲染器")
+_TECH_RULE_COMPOUNDS = ("层级规则", "排版规则", "语法规则", "渲染规则", "路由规则", "匹配规则")
 
 
 def looks_like_pasted_document(content: str) -> bool:
@@ -427,6 +432,11 @@ def looks_like_pasted_document(content: str) -> bool:
     if sum(1 for ln in lines if re.match(r"^\s*#{1,4}\s+\S", ln)) >= 3:
         return True
     if "|---" in content or sum(1 for ln in lines if ln.strip().startswith("|") and ln.count("|") >= 2) >= 3:
+        return True
+    if sum(1 for ln in lines if ln.count("\t") >= 2) >= 2:
+        return True
+    lic_hits = _LICENSE_SPEC_RE.findall(content)
+    if len(lic_hits) >= 2 or (lic_hits and any(cue in content for cue in _TECH_SPEC_CUES)):
         return True
     if len(re.findall(r"https?://", content)) >= 2:
         return True
@@ -647,9 +657,12 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
         text = r["content"]
         if BROAD_META_RE.search(text[:160]):
             continue
+        text_for_rule = text
+        for term in _TECH_RULE_COMPOUNDS:
+            text_for_rule = text_for_rule.replace(term, "")
         scores = {
             "core_fact": sum(2 for c in BROAD_IDENTITY if c in text),
-            "hard_rule": sum(2 for c in BROAD_RULE if c in text),
+            "hard_rule": sum(2 for c in BROAD_RULE if c in text_for_rule),
             "complaint": sum(2 for c in BROAD_PRINCIPLE if c in text),
             "recurring_mistake": sum(2 for c in BROAD_NEGATIVE if c in text),
         }
@@ -662,6 +675,14 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
             "complaint": BROAD_PRINCIPLE,
             "recurring_mistake": BROAD_NEGATIVE,
         }[signal]
+
+        def _sentence_has_signal_cue(sent: str) -> bool:
+            check = sent
+            if signal == "hard_rule":
+                for term in _TECH_RULE_COMPOUNDS:
+                    check = check.replace(term, "")
+            return any(c in check for c in signal_cues)
+
         # Keep one short, self-contained declarative sentence that actually carries the
         # signal; dumping a 500-char request or a rhetorical question is noise.
         sentence = next(
@@ -670,7 +691,7 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
              and not is_pure_question_message(s)
              and not BROAD_META_RE.search(s)
              and not looks_like_process_talk(s)[0]
-             and any(c in s for c in signal_cues)),
+             and _sentence_has_signal_cue(s)),
             "",
         )
         if not sentence:

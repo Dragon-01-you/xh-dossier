@@ -85,6 +85,7 @@ IGNORE_SECTION_MARKERS = ("怎么用", "使用说明", "如何使用", "填写�
 HOLLOW_OPTION_MARKERS = (
     "暂时没有", "其他硬限制", "自定义", "全打字", "有（列", "有(列",
     "有，先全记", "有,先全记", "都清晰", "不急着写",
+    "其他特定禁令", "其他禁令", "其他补充", "其他项",
 )
 _QUOTE_PATH_RE = re.compile(r"(?:[A-Za-z]:\\Users\\[^\s，。；、）】]+|/Users/[^\s，。；、）】]+|/home/[^\s，。；、）】]+)")
 _QUOTE_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
@@ -175,7 +176,9 @@ def _clean_display(text: str) -> str:
     t = re.sub(r"\*\*(.+?)\*\*", r"\1", text or "")
     t = re.sub(r"__(.+?)__", r"\1", t)
     t = _PENDING_TAG_RE.sub("", t)
+    t = t.replace("`", "")
     t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+([，。；、：！？])", r"\1", t)
     for word in _UNCERTAIN_SAFE:
         t = t.replace(word, "未定")
     t = t.replace("<", "").replace(">", "")
@@ -253,12 +256,17 @@ def _extract_option_letters(rest: str, options: dict[str, tuple[int, str, str]])
     cleaned = _PENDING_TAG_RE.sub("", rest).strip()
     if not cleaned:
         return []
-    # Drop parenthetical uncertain notes such as "（A 待确认）" before scanning letters.
-    no_pending_paren = re.sub(r"[（(][^）)]*待确认[^）)]*[）)]", "", cleaned)
-    if not re.match(r"^[A-F](?:[\s+/、，,（(全]|$)", no_pending_paren):
+    # Drop parenthetical uncertain/auxiliary option notes such as "（A 待确认）",
+    # "（不确定项加 C）", or "（B 作为补充）" before scanning primary option letters.
+    no_aux_paren = re.sub(
+        r"[（(][^）)]*(?:待确认|不确定|作为补充|补充|可选)[^）)]*[）)]",
+        "",
+        cleaned,
+    )
+    if not re.match(r"^[A-F](?:[\s+/、，,（(全]|$)", no_aux_paren):
         return []
     letters: list[str] = []
-    for ch in re.findall(r"(?<![A-Za-z])([A-F])(?![A-Za-z])", no_pending_paren):
+    for ch in re.findall(r"(?<![A-Za-z])([A-F])(?![A-Za-z])", no_aux_paren):
         if ch in options and ch not in letters:
             letters.append(ch)
     return letters
@@ -446,10 +454,13 @@ def _parse_markdown(path: pathlib.Path, bundle: InterviewBundle) -> None:
                     continue
                 letters = _extract_option_letters(rest_raw, options)
                 if letters:
-                    # Extract optional inline supplement like `（不代签字、不伪造）`
+                    # Extract optional inline supplement like `（不代签字、不伪造）`,
+                    # skipping option cross-references such as `（B 作为补充）` or `（不确定项加 C）`.
                     extra_notes: list[str] = []
                     for pm_note in re.findall(r"[（(]([^）)]+)[）)]", rest_clean):
                         if any(k in pm_note for k in ("待确认", "主线", "推荐")):
+                            continue
+                        if re.search(r"(?<![A-Za-z])[A-F](?![A-Za-z])", pm_note):
                             continue
                         if len(pm_note.strip()) >= 4:
                             extra_notes.append(pm_note.strip())

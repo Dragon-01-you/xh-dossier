@@ -160,3 +160,36 @@ def test_afterchat_sanitized_sample_yields_nonzero_l2_reflection_candidates(tmp_
     assert "今天复盘" in l2_md or "我做错了" in l2_md or "分发给别人很难" in l2_md
     # Official kit body must remain unsigned/unchanged by L2 pending candidates.
     assert "二层回流待确认区" not in (kit / "04-正反例避坑账.md").read_text(encoding="utf-8")
+
+
+def test_pasted_license_spec_comparison_table_rejected_from_l2(tmp_path: pathlib.Path) -> None:
+    pasted_spec = (
+        "NotoSerif\tOFL\t高\t设计 token（层级规则/行距）与 14 个 SVG 图表；"
+        "⚠ 它只出 PDF，和我们纯文本工作流冲突。\n"
+        "RenderEngine\tHTML/CSS→PDF 引擎\tBSD-3\t高\t若走 PDF 路线，它就是渲染器。"
+    )
+    ok, reason = L2.classify_narrative(pasted_spec)
+    assert ok is False and reason == "non_personal:ai_or_material", (ok, reason)
+
+    genuine_principle = (
+        "我个人这些年形成的一条判断原则：做事顺序是 道 → 法 → 术 → 器，"
+        "目标和真需求没对齐前，绝不先沉迷下层工具和细枝末节。"
+    )
+    g_ok, g_reason = L2.classify_narrative(genuine_principle)
+    assert g_ok is True and g_reason == "personal", (g_ok, g_reason)
+
+    profiles_dir = _make_profiles(tmp_path / "profiles")
+    fp = tmp_path / "fp.md"
+    fp.write_text("# 一层报告\n- [REC-0099 | 2026-11-01] 占位待确认\n", encoding="utf-8")
+    db = _make_db(
+        tmp_path / "chat.db",
+        [
+            ("REC-0201", "20261006-115821-模板评审.md", "2026-10-06", "user", pasted_spec),
+            ("REC-0202", "20261006-120000-个人原则.md", "2026-10-06", "user", genuine_principle),
+        ],
+    )
+    res = L2.run_deep_backfill(profiles_dir, fp, db, tmp_path / "l2_out", broad=True)
+    report_text = pathlib.Path(res["report"]).read_text(encoding="utf-8")
+    assert "REC-0201" not in report_text, f"pasted license/spec table leaked into L2:\n{report_text}"
+    assert "REC-0202" in report_text, f"genuine personal principle should remain in L2:\n{report_text}"
+

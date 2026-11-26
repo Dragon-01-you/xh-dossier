@@ -251,4 +251,71 @@ def test_fabricated_chat_raw_quote_still_caught_by_raw_root(tmp_path: pathlib.Pa
     assert "02-核心判断准则.md: RAW_ZERO_HIT" in val.stdout
     assert "01-身份与当前主线.md: RAW_ZERO_HIT" not in val.stdout
     assert "03-硬规则与表达黑话.md: RAW_ZERO_HIT" not in val.stdout
+    assert "VALIDATE_OK" not in val.stdout
     assert "VALIDATE_FAIL" in val.stdout
+
+
+def test_prefill_card_skips_hollow_other_option_and_option_ref_parentheticals(
+    tmp_path: pathlib.Path,
+) -> None:
+    sample = """# 访谈预填卡：P2 边角回归样例
+
+## 第 2 轮：多平台与知识库地图
+
+### Q3. 今天说的和旧记录打架，按什么裁决？
+
+- A 一律听旧记录；
+- B 主客二分：称呼听今天，代码状态看客观原文；
+- C 全部 `[待确认]`，翻原文再拍板。
+
+**AI 预填：B（不确定项加 C）** `[待确认]`
+
+## 第 4 轮：核心判断与验收
+
+### Q1. 面对新方案，优先顺序？
+
+- A 目标与真需求 → 方法骨架 → 招式 → 工具；
+- B 先做最快原型碰人，再补原理；
+
+**AI 预填：A（B 作为补充）** `[待确认]`
+
+## 第 1 轮：表达顺序
+
+### Q2. 表达顺序怎么排？
+
+- A 结论先行：白话讲底层再贴命令；
+- C 看任务切换：熟活直接给结果，陌生机制先问清；
+
+**AI 预填：C（主线 A）** `[待确认]`
+
+## 第 5 轮：硬规则与黑话
+
+### Q1. 哪几条绝对不能碰？
+
+- A 原始导出只读，不直接写主知识库；
+- B 连试 2 次不通就换方案；
+- C 其他特定禁令。
+
+**AI 预填：A + B + C（不代签字、不伪造）** `[待确认]`
+"""
+    card = tmp_path / "访谈预填卡.md"
+    card.write_text(sample, encoding="utf-8")
+    bundle = INTERVIEW.load_interview(card)
+    joined = "\n".join(f.text for f in bundle.facts)
+
+    # Spurious unselected options, parenthetical meta option refs, and hollow options must be dropped.
+    assert "翻原文再拍板" not in joined
+    assert "不确定项加 C" not in joined
+    assert "B 作为补充" not in joined
+    assert "先做最快原型碰人" not in joined
+    assert "其他特定禁令" not in joined
+    assert "`" not in joined
+
+    # Primary choices, explicit `（主线 A）` pick, and real non-letter inline supplements must stay.
+    assert "称呼听今天，代码状态看客观原文" in joined
+    assert "目标与真需求" in joined
+    assert "熟活直接给结果" in joined
+    assert "白话讲底层再贴命令" in joined
+    assert "原始导出只读" in joined
+    assert "不代签字、不伪造" in joined
+
