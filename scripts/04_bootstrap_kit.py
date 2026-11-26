@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import collections
 import importlib
+import json
 import pathlib
 import re
 import shutil
@@ -101,7 +102,7 @@ LIST_ITEM_RE = re.compile(r"^\d+[.、)）]\s*")
 # Material that is not the user's own durable view: pasted prompts, role cards,
 # AI summaries, URLs, code fences, tool logs. Keep it out of the dossier.
 NOISE_MARKERS = (
-    "你是一名", "你是我的", "请扮演", "扮演一下", "绝对铁律", "# Role",
+    "你是一名", "你是一位", "你是我的", "请扮演", "扮演一下", "绝对铁律", "# Role",
     "## Role", "智能总结", "内容总结", "Thought Process", "thoughtprocess",
     "欢迎收听", "感谢收听", "本期", "转写", "字幕", "skill://", "plugin://",
     "[操作电脑]", "[seedaudio", "[GitHub]", "http://", "https://",
@@ -110,6 +111,9 @@ NOISE_MARKERS = (
     "角色与核心使命", "你的项目身份", "你的专长", "你的产出",
     "MASTER BRIEF", "PROJECT MASTER", "你是由", "环境说明",
     "检测到您的", "本报告", "报告日期", "听播客:",
+    # Issue #130: pasted multi-agent / persona / prompt-template headers
+    "子智能体", "独立委员", "你输出的所有内容必须", "【核心原则】", "【角色设定】",
+    "产品哲学:", "产品哲学：", "通用规则(", "通用规则（",
     # Issue #94: pasted third-party person intros / bios / podcast scripts are
     # not the user's own durable view; keep them out of the A-level candidates.
     "个人简介", "人物简介", "教育经历", "他认为", "她认为", "作者认为",
@@ -264,27 +268,32 @@ def chunk_text(text: str, size: int = 420) -> list[str]:
     return chunks or [text[:size]]
 
 
-def is_noise(text: str) -> bool:
+def noise_reason(text: str) -> str:
+    """Return a non-empty filter reason when a chunk should be excluded from L1, else ''."""
     compact = re.sub(r"\s+", "", text)
     if any(marker.replace(" ", "") in compact for marker in NOISE_MARKERS):
-        return True
+        return "prompt_or_material_noise"
     if any(marker in compact for marker in ABUSIVE_MARKERS):
-        return True
+        return "abusive_noise"
     if len(text) < 15 or len(text) > 600:
-        return True
+        return "length_out_of_range"
     if text.count("```") or text.startswith(("```", "|", "---")):
-        return True
+        return "code_or_markdown_block"
     # A pure question or a one-word command is not a durable view.
     if len(text) < 35 and text.endswith(("?", "？")):
-        return True
+        return "question"
     # Issue #94: questions directed at the AI never become durable candidates.
     if QUESTION_RE.search(text):
-        return True
+        return "question"
     # Task instructions aimed at the AI ("你帮我 / 请你 / 我需要你") are not
     # self-description unless the same message also states a first-person fact.
     if any(p in compact for p in ("你帮我", "请你", "我需要你", "你给我", "你要")) and not SELF_RE.search(text):
-        return True
-    return False
+        return "ai_request_without_self"
+    return ""
+
+
+def is_noise(text: str) -> bool:
+    return bool(noise_reason(text))
 
 
 def score(text: str, cues: tuple[str, ...]) -> int:
@@ -352,6 +361,9 @@ def candidate_sentence(text: str, kind: str) -> str:
             if "你可以" in part or "你看" in part or "我们这里可以" in part:
                 continue
             if len(part) > 120:
+                continue
+            p_ok, _p_reason = VALIDATOR.principle_shape(part)
+            if not p_ok:
                 continue
             if not re.search(r"(原则|准则|优先|取舍|验收|价值|长期|短期|质量|速度)", part):
                 continue
@@ -816,15 +828,22 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
         con.close()
 
     records: list[Record] = []
+    filter_counts: collections.Counter[str] = collections.Counter()
+    user_rows = 0
     for row in rows:
         if str(row.get("role", "")).lower() != "user":
+            filter_counts["non_user_role"] += 1
             continue
+        user_rows += 1
         clean = sanitize(str(row.get("content", "")))
         if len(clean) < 15:
+            filter_counts["too_short"] += 1
             continue
         chunks = chunk_text(clean) if len(clean) > 600 else [clean]
         for chunk in chunks:
-            if is_noise(chunk):
+            reason = noise_reason(chunk)
+            if reason:
+                filter_counts[reason] += 1
                 continue
             records.append(Record(
                 rec_id=str(row.get("rec_id") or f"REC-{len(records)+1:04d}"),
@@ -839,8 +858,10 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
     # "Messy chat" contains personal chats, pasted prompts and old projects.
     # Prefer work-titled conversations; only fall back to all records when the
     # work filter is too thin to build a useful draft.
+    chunks_before_work_filter = len(records)
     work_records = [r for r in records if work_source(source_title(r.source_file))]
     if len(work_records) >= 24:
+        filter_counts["non_work_session"] += len(records) - len(work_records)
         records = work_records
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -893,17 +914,55 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
             legacy.unlink()
 
     ok, messages = VALIDATOR.validate_kit(out_dir, strict=True)
-    return {
-        "records": len(records),
-        "sections": {
-            "identity": len(identity), "mainline": len(mainline),
-            "history": len(history),
-            "principles": len(principles), "rules": len(rules),
-            "negative": len(negatives), "positive": len(positives),
-            "interview": len(bundle.facts),
-        },
+    interview_warning = ""
+    if interview is not None and bundle.is_empty():
+        iv_path = pathlib.Path(interview).expanduser()
+        if not iv_path.exists():
+            interview_warning = (
+                f"INTERVIEW_WARN: 显式传入的访谈路径不存在（{iv_path}），"
+                "本次初稿未吸收任何访谈 A 级条目，请核对路径。"
+            )
+        else:
+            interview_warning = (
+                f"INTERVIEW_WARN: 显式传入了访谈路径（{iv_path}），但解析出 0 条有效事实"
+                "（文件可能为空或格式未识别），本次初稿未包含访谈 A 级基准，请检查访谈文档格式。"
+            )
+    sections_map = {
+        "identity": len(identity), "mainline": len(mainline),
+        "history": len(history),
+        "principles": len(principles), "rules": len(rules),
+        "negative": len(negatives), "positive": len(positives),
+        "interview": len(bundle.facts),
+    }
+    highlights = [
+        *[f"[A级·访谈/{f.slot}] {f.text[:80]}" for f in bundle.facts[:3]],
+        *[f"[02判断候选] {r.display[:80]}" for r in principles[:2]],
+        *[f"[03规则候选] {r.display[:80]}" for r in rules[:2]],
+        *[f"[04正反例候选] {r.display[:80]}" for r in (negatives[:1] + positives[:1])],
+    ][:6]
+    build_stats = {
+        "db_total_rows": len(rows),
+        "user_rows": user_rows,
+        "chunks_before_work_filter": chunks_before_work_filter,
+        "usable_records": len(records),
+        "filtered_by_reason": dict(filter_counts),
+        "sections": sections_map,
         "interview_facts": len(bundle.facts),
         "interview_sources": bundle.source_files,
+        "interview_warning": interview_warning,
+        "highlights": highlights,
+    }
+    stats_path = out_dir / "_evidence" / "build-stats.json"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    stats_path.write_text(json.dumps(build_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "records": len(records),
+        "sections": sections_map,
+        "interview_facts": len(bundle.facts),
+        "interview_sources": bundle.source_files,
+        "interview_warning": interview_warning,
+        "stats": build_stats,
+        "stats_path": str(stats_path),
         "validate_ok": ok,
         "validate_messages": messages,
         "evidence": str(out_dir / EVIDENCE_REL),
@@ -943,6 +1002,8 @@ def main() -> int:
     print("BOOTSTRAP_OK " + " ".join(f"{k}={v}" for k, v in res["sections"].items()))
     if res["interview_facts"]:
         print(f"INTERVIEW_OK facts={res['interview_facts']} sources={','.join(res['interview_sources'])}")
+    elif res.get("interview_warning"):
+        print(res["interview_warning"])
     print(f"records={res['records']} evidence={res['evidence']}")
     if res["validate_ok"]:
         print("VALIDATE_OK")

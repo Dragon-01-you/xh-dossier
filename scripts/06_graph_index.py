@@ -30,6 +30,7 @@ import pathlib
 import re
 import sqlite3
 import sys
+import unicodedata
 from importlib import import_module
 from typing import Any, Iterable
 
@@ -56,10 +57,25 @@ RELATION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("LIKES", re.compile(r"(?:喜欢|偏好|偏爱|着迷于)\s*([\u4e00-\u9fa5A-Za-z0-9#+.]{2,16})")),
     ("RESPONSIBLE_FOR", re.compile(r"负责\s*([\u4e00-\u9fa5A-Za-z0-9#+.]{2,16})")),
     ("USES", re.compile(r"(?:使用|采用|用的是|在用)\s*([\u4e00-\u9fa5A-Za-z0-9#+.]{2,16})")),
+    ("ABANDONED", re.compile(r"(?:彻底)?(?:放弃|停更|砍掉|停止使用|不再使用|不再做)\s*([\u4e00-\u9fa5A-Za-z0-9#+.]{2,16})")),
 ]
 
+POSITIVE_ACTION_RELATIONS = frozenset({
+    "LEARNS", "PREPARES_FOR", "WORKS_AT", "LIVES_IN", "LIKES", "RESPONSIBLE_FOR", "USES", "ADOPTS",
+})
+NEGATIVE_ACTION_RELATIONS = frozenset({
+    "ABANDONED", "STOPS", "DISLIKES", "AVOIDS", "REJECTS",
+})
+INTERJECTION_FRAGMENTS = frozenset({
+    "嗯", "喵", "啊", "哦", "唉", "哈哈", "呵呵", "嘿嘿", "嗯嗯", "好的", "可以", "不是", "不知道", "爱你", "左肩",
+})
+
 TRIM_SUFFIX = ("这个", "那个", "一个", "一下", "方面", "东西", "的", "了", "过", "着")
-STOP_OBJECTS = {"AI", "ai", "你", "他", "她", "它", "我们", "你们", "他们", "自己", "什么", "怎么", "这里", "那里"}
+STOP_OBJECTS = {
+    "AI", "ai", "你", "他", "她", "它", "我们", "你们", "他们", "自己",
+    "什么", "怎么", "这里", "那里", "一下", "一个", "一种", "一些", "一点",
+    "这样", "那样", "这个", "那个", "东西", "事情", "方面",
+}
 
 # Noise that must never become a graph node: hex colors, rgba(), CSS declarations,
 # bare numbers, URLs, code punctuation. Rule extraction has no NER to separate
@@ -127,18 +143,18 @@ PARTICLE_ONLY_RE = re.compile(r"^[的是了在和与我你他她它及或嘛呢�
 def _clean_span(span: str) -> str | None:
     text = span.strip()
     # Strip markdown bold/italic/heading/quote decorations and edge punctuation.
-    text = text.strip("*#->·• ，。！？、,.!?：:;")
+    text = text.strip("*#->·•—~… ，。！？、,.!?：:;")
     for suffix in TRIM_SUFFIX:
         if text.endswith(suffix) and len(text) - len(suffix) >= 2:
             text = text[: -len(suffix)]
-    text = text.strip("*#->·• ，。！？、,.!?：:;")
-    if len(text) < 2 or len(text) > 16 or text in STOP_OBJECTS:
+    text = text.strip("*#->·•—~… ，。！？、,.!?：:;")
+    if len(text) < 2 or len(text) > 16 or text in STOP_OBJECTS or text in INTERJECTION_FRAGMENTS:
         return None
-    if any(ch in text for ch in NOISE_CHARS):
+    if any(ch in text for ch in NOISE_CHARS) or "——" in text or "…" in text or "~" in text:
         return None
     if "/" in text or "\\" in text or "http" in text.lower():
         return None
-    if text[0] in "你我他她它":
+    if text[0] in "你我他她它了的着之":
         return None
     if CODE_NOISE_RE.match(text):
         return None
@@ -150,16 +166,23 @@ def _clean_span(span: str) -> str | None:
     return text
 
 
-def extract_entities(content: str, *, lexicon: Iterable[str] = ()) -> list[dict[str, str]]:
-    """Rule-based entity candidates: self node, quoted spans, optional lexicon hits.
+def extract_entities(
+    content: str,
+    *,
+    lexicon: Iterable[str] = (),
+    extract_quoted: bool = False,
+) -> list[dict[str, str]]:
+    """Rule-based entity candidates: self node + explicit lexicon whitelist.
 
-    This is a conservative NER stand-in, not a real named-entity recognizer.
+    Issue #132: indiscriminate quoted-span grabbing (which created >95% lyric /
+    interjection fragment noise on real exports) is disabled by default.
     """
     found: dict[str, dict[str, str]] = {SELF_CANONICAL: {"canonical_name": SELF_CANONICAL, "entity_type": "self"}}
-    for quoted in QUOTED_RE.findall(content):
-        cleaned = _clean_span(quoted)
-        if cleaned:
-            found.setdefault(cleaned, {"canonical_name": cleaned, "entity_type": "quoted"})
+    if extract_quoted:
+        for quoted in QUOTED_RE.findall(content):
+            cleaned = _clean_span(quoted)
+            if cleaned:
+                found.setdefault(cleaned, {"canonical_name": cleaned, "entity_type": "quoted"})
     for term in lexicon:
         term = (term or "").strip()
         if term and term in content:
@@ -247,8 +270,18 @@ def _rel_id(rec_id: str, subject: str, relation: str, object_name: str) -> str:
     return "REL-" + hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
 
 
-def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: bool = False) -> dict[str, int]:
+def build_graph(
+    db_path: pathlib.Path,
+    *,
+    lexicon: Iterable[str] = (),
+    rebuild: bool = False,
+    include_assistant: bool = False,
+) -> dict[str, int]:
     """Extract entities + edges from ``records`` and store them in the derived tables.
+
+    Issue #132: strict role isolation by default — only ``role == 'user'`` records
+    are indexed into the personal graph unless ``include_assistant=True`` is explicitly
+    requested for debugging.
 
     ``rebuild=True`` clears the derived graph tables first (index rebuild, not history
     invalidation); default is incremental ``INSERT OR IGNORE``.
@@ -264,15 +297,19 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
             con.execute("DELETE FROM entities")
             con.commit()
 
-        rows = con.execute("SELECT rec_id, created_at, role, content FROM records ORDER BY rec_id").fetchall()
         # #10: prefer the export's event_date for the graph's valid-time window;
         # fall back to created_at only for legacy rows without the column.
         record_cols = [r[1] for r in con.execute("PRAGMA table_info(records)").fetchall()]
         has_event_date = "event_date" in record_cols
-        if has_event_date:
-            rows = con.execute(
-                "SELECT rec_id, created_at, event_date, role, content FROM records ORDER BY rec_id"
-            ).fetchall()
+        cols = "rec_id, created_at, event_date, role, content" if has_event_date else "rec_id, created_at, role, content"
+        all_rows = con.execute(f"SELECT {cols} FROM records ORDER BY rec_id").fetchall()
+        if include_assistant:
+            rows = all_rows
+            skipped_non_user = 0
+        else:
+            rows = [r for r in all_rows if str(r["role"] or "").strip().lower() == "user"]
+            skipped_non_user = len(all_rows) - len(rows)
+
         lex = list(lexicon)
         entity_count = 0
         edge_count = 0
@@ -283,7 +320,7 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
             valid_date = event if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", event) else ""
             date = (valid_date or ((row["created_at"] or "")[:10] if not has_event_date else "")) or None
             trans_date = ((row["created_at"] or "")[:10] or date)
-            entities = extract_entities(content, lexicon=lex)
+            entities = extract_entities(content, lexicon=lex, extract_quoted=False)
             for ent in entities:
                 cur = con.execute(
                     "INSERT OR IGNORE INTO entities (entity_id, canonical_name, entity_type, first_seen) VALUES (?, ?, ?, ?)",
@@ -296,10 +333,12 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
             for edge in edges:
                 # register a span entity for unmatched objects
                 if edge["object"] not in {e["canonical_name"] for e in entities}:
-                    con.execute(
+                    cur_obj = con.execute(
                         "INSERT OR IGNORE INTO entities (entity_id, canonical_name, entity_type, first_seen) VALUES (?, ?, 'span', ?)",
                         (_entity_id(edge["object"]), edge["object"], date),
                     )
+                    if cur_obj.rowcount:
+                        entity_count += 1
                 rel_id = _rel_id(row["rec_id"], edge["subject"], edge["relation"], edge["object"])
                 cur = con.execute(
                     """
@@ -313,9 +352,279 @@ def build_graph(db_path: pathlib.Path, *, lexicon: Iterable[str] = (), rebuild: 
                 if cur.rowcount:
                     edge_count += 1
         con.commit()
-        return {"records": len(rows), "entities": entity_count, "edges": edge_count, "negation_skipped": negation_skipped}
+        return {
+            "records": len(rows),
+            "skipped_non_user": skipped_non_user,
+            "entities": entity_count,
+            "edges": edge_count,
+            "negation_skipped": negation_skipped,
+        }
     finally:
         con.close()
+
+
+def _norm_for_quote_check(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or ""))
+
+
+def _is_opposite_relation(rel_a: str, rel_b: str) -> bool:
+    a, b = rel_a.upper(), rel_b.upper()
+    return (
+        (a in POSITIVE_ACTION_RELATIONS and b in NEGATIVE_ACTION_RELATIONS)
+        or (a in NEGATIVE_ACTION_RELATIONS and b in POSITIVE_ACTION_RELATIONS)
+    )
+
+
+def import_verified_proposals(
+    db_path: pathlib.Path,
+    proposals: pathlib.Path | Iterable[dict[str, Any]],
+    *,
+    allow_non_user: bool = False,
+) -> dict[str, Any]:
+    """Issue #132: Deterministic Python verification gate for Agent / external-engine JSONL proposals.
+
+    Every proposed edge must carry a real ``rec_id`` in ``records`` (``role == 'user'``
+    by default) and an exact ``quote`` present in that record's original content.
+    Conflicting/superseding edges close old edges via bitemporal fields (``valid_to``,
+    ``trans_to``, ``t_invalid=1``, ``superseded_by``) without deleting history.
+    """
+    items: list[tuple[int, dict[str, Any]]] = []
+    if isinstance(proposals, (pathlib.Path, str)):
+        p = pathlib.Path(proposals)
+        if not p.is_file():
+            raise FileNotFoundError(f"Proposals file not found: {p}")
+        for idx, raw_line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                obj = json.loads(raw_line)
+                if not isinstance(obj, dict):
+                    raise ValueError("not a JSON object")
+                items.append((idx, obj))
+            except (json.JSONDecodeError, ValueError):
+                items.append((idx, {"__parse_error__": True}))
+    else:
+        for idx, obj in enumerate(proposals, start=1):
+            items.append((idx, dict(obj)))
+
+    con = _connect(db_path)
+    accepted = 0
+    superseded = 0
+    rejections: list[dict[str, Any]] = []
+    try:
+        ensure_graph_schema(con)
+        record_cols = [r[1] for r in con.execute("PRAGMA table_info(records)").fetchall()]
+        has_event_date = "event_date" in record_cols
+        cols = "rec_id, created_at, event_date, role, content" if has_event_date else "rec_id, created_at, role, content"
+        rec_map = {
+            r["rec_id"]: dict(r)
+            for r in con.execute(f"SELECT {cols} FROM records").fetchall()
+        }
+
+        for lineno, prop in items:
+            if prop.get("__parse_error__"):
+                rejections.append({"line": lineno, "rec_id": "", "reason": "invalid_json"})
+                continue
+            subject = str(prop.get("subject") or "").strip()
+            relation = str(prop.get("relation") or "").strip().upper()
+            obj_name = str(prop.get("object") or "").strip()
+            rec_id = str(prop.get("rec_id") or "").strip()
+            quote = str(prop.get("quote") or "").strip()
+            extractor = str(prop.get("extractor") or "agent").strip() or "agent"
+            confidence = float(prop.get("confidence", 1.0))
+
+            if not (subject and relation and obj_name):
+                rejections.append({"line": lineno, "rec_id": rec_id, "reason": "invalid_triple"})
+                continue
+            rec = rec_map.get(rec_id)
+            if rec is None:
+                rejections.append({"line": lineno, "rec_id": rec_id, "reason": "rec_id_not_found"})
+                continue
+            if not allow_non_user and str(rec.get("role") or "").strip().lower() != "user":
+                rejections.append({"line": lineno, "rec_id": rec_id, "reason": "non_user_record"})
+                continue
+            norm_q = _norm_for_quote_check(quote)
+            norm_content = _norm_for_quote_check(str(rec.get("content") or ""))
+            if len(norm_q) < 4 or norm_q not in norm_content:
+                rejections.append({"line": lineno, "rec_id": rec_id, "reason": "quote_mismatch"})
+                continue
+
+            valid_from = str(prop.get("valid_from") or "").strip()[:10]
+            if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", valid_from):
+                ev_d = str(rec.get("event_date") or "").strip()[:10] if has_event_date else ""
+                valid_from = ev_d if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", ev_d) else str(rec.get("created_at") or "")[:10]
+            valid_from_val = valid_from or None
+            trans_from = str(rec.get("created_at") or "")[:10] or (valid_from_val or "unknown")
+
+            for ent_name, ent_type in ((subject, "self" if subject == SELF_CANONICAL else "verified"),
+                                       (obj_name, "verified")):
+                con.execute(
+                    "INSERT OR IGNORE INTO entities (entity_id, canonical_name, entity_type, first_seen) VALUES (?, ?, ?, ?)",
+                    (_entity_id(ent_name), ent_name, ent_type, valid_from_val),
+                )
+
+            rel_id = _rel_id(rec_id, subject, relation, obj_name)
+            existing_row = con.execute(
+                "SELECT extractor FROM relations WHERE rel_id=?",
+                (rel_id,),
+            ).fetchone()
+            if existing_row is None:
+                con.execute(
+                    """
+                    INSERT INTO relations
+                        (rel_id, subject, relation, object, valid_from, valid_to,
+                         trans_from, trans_to, t_invalid, fact_text, rec_id, extractor, confidence)
+                    VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?, ?)
+                    """,
+                    (rel_id, subject, relation, obj_name, valid_from_val, trans_from, quote, rec_id, extractor, confidence),
+                )
+                accepted += 1
+            elif existing_row["extractor"] == "rule" and extractor != "rule":
+                con.execute(
+                    """
+                    UPDATE relations
+                       SET fact_text = ?, extractor = ?, confidence = ?
+                     WHERE rel_id = ?
+                    """,
+                    (quote, extractor, confidence, rel_id),
+                )
+                accepted += 1
+
+            # Bitemporal supersession: explicit supersedes_rel_id OR opposing action on same (subject, object)
+            explicit_old = str(prop.get("supersedes_rel_id") or "").strip()
+            active_same = con.execute(
+                "SELECT rel_id, relation, valid_from FROM relations "
+                "WHERE subject=? AND object=? AND t_invalid=0 AND rel_id != ?",
+                (subject, obj_name, rel_id),
+            ).fetchall()
+            to_close: list[str] = []
+            if explicit_old:
+                to_close.append(explicit_old)
+            for row in active_same:
+                if _is_opposite_relation(row["relation"], relation):
+                    old_d = row["valid_from"] or ""
+                    new_d = valid_from_val or ""
+                    if not old_d or not new_d or new_d >= old_d:
+                        to_close.append(row["rel_id"])
+            for old_id in dict.fromkeys(to_close):
+                upd = con.execute(
+                    """
+                    UPDATE relations
+                       SET valid_to = ?, trans_to = ?, t_invalid = 1, superseded_by = ?
+                     WHERE rel_id = ? AND t_invalid = 0
+                    """,
+                    (valid_from_val, trans_from, rel_id, old_id),
+                )
+                if upd.rowcount:
+                    superseded += 1
+
+        con.commit()
+        return {
+            "accepted": accepted,
+            "rejected": len(rejections),
+            "superseded": superseded,
+            "rejections": rejections,
+        }
+    finally:
+        con.close()
+
+
+def export_conflicts(db_path: pathlib.Path) -> list[dict[str, Any]]:
+    """Issue #132: Export opposing-action or superseded bitemporal edge pairs with both sides' provenance."""
+    con = _connect(db_path)
+    try:
+        ensure_graph_schema(con)
+        rows = con.execute(
+            """
+            SELECT r.*, rec.content AS record_content, rec.source_file AS source_file
+              FROM relations r
+              JOIN records rec ON r.rec_id = rec.rec_id
+             WHERE lower(rec.role) = 'user'
+             ORDER BY r.valid_from, r.rel_id
+            """
+        ).fetchall()
+        by_id = {r["rel_id"]: dict(r) for r in rows}
+        conflicts: list[dict[str, Any]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+
+        # 1. Explicit bitemporal supersession pairs
+        for r in rows:
+            sup = r["superseded_by"]
+            if r["t_invalid"] == 1 and sup and sup in by_id:
+                pair = (r["rel_id"], sup)
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    newer = by_id[sup]
+                    conflicts.append({
+                        "kind": "bitemporal_superseded",
+                        "subject": r["subject"],
+                        "object": r["object"],
+                        "earlier": {
+                            "rel_id": r["rel_id"], "relation": r["relation"],
+                            "valid_from": r["valid_from"], "valid_to": r["valid_to"],
+                            "rec_id": r["rec_id"], "fact_text": r["fact_text"],
+                            "excerpt": (r["record_content"] or "").replace("\n", " ")[:180],
+                        },
+                        "later": {
+                            "rel_id": newer["rel_id"], "relation": newer["relation"],
+                            "valid_from": newer["valid_from"], "valid_to": newer["valid_to"],
+                            "rec_id": newer["rec_id"], "fact_text": newer["fact_text"],
+                            "excerpt": (newer["record_content"] or "").replace("\n", " ")[:180],
+                        },
+                    })
+
+        # 2. Active opposing-action edges on the same (subject, object)
+        by_pair: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for r in rows:
+            by_pair.setdefault((r["subject"], r["object"]), []).append(dict(r))
+        for (subj, obj), edges in by_pair.items():
+            for i, e1 in enumerate(edges):
+                for e2 in edges[i + 1:]:
+                    if not _is_opposite_relation(e1["relation"], e2["relation"]):
+                        continue
+                    pair = (e1["rel_id"], e2["rel_id"])
+                    if pair in seen_pairs or (e2["rel_id"], e1["rel_id"]) in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    conflicts.append({
+                        "kind": "opposing_action",
+                        "subject": subj,
+                        "object": obj,
+                        "earlier": {
+                            "rel_id": e1["rel_id"], "relation": e1["relation"],
+                            "valid_from": e1["valid_from"], "valid_to": e1["valid_to"],
+                            "rec_id": e1["rec_id"], "fact_text": e1["fact_text"],
+                            "excerpt": (e1["record_content"] or "").replace("\n", " ")[:180],
+                        },
+                        "later": {
+                            "rel_id": e2["rel_id"], "relation": e2["relation"],
+                            "valid_from": e2["valid_from"], "valid_to": e2["valid_to"],
+                            "rec_id": e2["rec_id"], "fact_text": e2["fact_text"],
+                            "excerpt": (e2["record_content"] or "").replace("\n", " ")[:180],
+                        },
+                    })
+        return conflicts
+    finally:
+        con.close()
+
+
+def render_conflicts_markdown(conflicts: list[dict[str, Any]]) -> str:
+    lines = [
+        "# 图谱冲突与前后反转待确认清单",
+        "",
+        f"> 共检测到 `{len(conflicts)}` 组实体冲突/时间反转；每组均保留双边 `rec_id` 与原文，需本人裁定，绝不静默删旧边。",
+        "",
+    ]
+    for i, c in enumerate(conflicts, start=1):
+        e1, e2 = c["earlier"], c["later"]
+        lines.extend([
+            f"## 冲突-{i:02d} [待确认] {c['subject']} ↔ {c['object']}（{c['kind']}）",
+            f"- **较早记录** `[{e1['rec_id']} | {e1.get('valid_from') or '?'}]` `{e1['relation']}`：{e1['excerpt']}",
+            f"- **较新记录** `[{e2['rec_id']} | {e2.get('valid_from') or '?'}]` `{e2['relation']}`：{e2['excerpt']}",
+            "",
+        ])
+    return "\n".join(lines)
 
 
 def invalidate_relation(
@@ -523,7 +832,15 @@ def render_graph_markdown(rows: list[dict[str, Any]], *, entity_name: str) -> st
 def main() -> int:
     parser = argparse.ArgumentParser(description="Layer 3 graph recall: rule-extracted entity–relation edges.")
     parser.add_argument("--db", required=True, type=pathlib.Path)
-    parser.add_argument("--action", choices=["build", "neighbors", "recall"], default="recall")
+    parser.add_argument(
+        "--action",
+        choices=["build", "neighbors", "recall", "import-proposals", "conflicts"],
+        default="recall",
+    )
+    parser.add_argument("--proposals", type=pathlib.Path, help="JSONL proposals file for import-proposals.")
+    parser.add_argument("--out", type=pathlib.Path, help="Optional output markdown file for conflicts export.")
+    parser.add_argument("--include-assistant", action="store_true",
+                        help="Debug opt-in: include non-user records in graph build (default: user only).")
     parser.add_argument("--entity", help="Entity name (node) for neighborhood / edge filter.")
     parser.add_argument("--relation", help="Predicate filter, e.g. LEARNS / WORKS_AT / MENTIONS.")
     parser.add_argument("--keyword", help="Optional FTS5 keyword combined with edge filter.")
@@ -539,10 +856,36 @@ def main() -> int:
 
     try:
         if args.action == "build":
-            stats = build_graph(args.db, lexicon=args.lexicon, rebuild=args.rebuild)
+            stats = build_graph(
+                args.db,
+                lexicon=args.lexicon,
+                rebuild=args.rebuild,
+                include_assistant=args.include_assistant,
+            )
             print(f"GRAPH_BUILD {json.dumps(stats, ensure_ascii=False)}")
             if args.json:
                 print(json.dumps(stats, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.action == "import-proposals":
+            if not args.proposals:
+                print("IMPORT_NEEDS: --proposals is required")
+                return 2
+            res = import_verified_proposals(args.db, args.proposals)
+            print(f"GRAPH_IMPORT {json.dumps(res, ensure_ascii=False)}")
+            return 0
+
+        if args.action == "conflicts":
+            conflicts = export_conflicts(args.db)
+            md = render_conflicts_markdown(conflicts)
+            if args.out:
+                args.out.parent.mkdir(parents=True, exist_ok=True)
+                args.out.write_text(md, encoding="utf-8")
+            print(f"GRAPH_CONFLICTS {len(conflicts)}")
+            if args.json:
+                print(json.dumps(conflicts, ensure_ascii=False, indent=2))
+            else:
+                print(md)
             return 0
 
         if args.action == "neighbors":

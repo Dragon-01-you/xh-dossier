@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import collections
+import json
 import pathlib
 import re
 import unicodedata
@@ -67,21 +68,24 @@ _CJK_DATE_RE = re.compile(r"(20\d{2})年(\d{1,2})月(\d{1,2})日")
 def _is_quoted_rule_example(line: str, cliche: str) -> bool:
     """Return True only for 禁止说“...” style intentional citations.
 
-    A rule may list several quoted phrases in a row ("禁止说“A”“B”…"), so the
-    rule verb must appear before the cliché and the span between them must not
-    cross a sentence terminator. This still rejects
-    “A”这是禁止的腔调, where the rule verb appears after the citation.
+    A rule may list several quoted phrases in a row ("禁止说“A”“B”…") or
+    slash-separated examples inside one quote ("禁止：“A/多维度赋能”等水话"),
+    so the rule verb must appear before the opening quote enclosing the cliché
+    and the span between them must not cross a sentence terminator. This still
+    rejects “A”这是禁止的腔调, where the rule verb appears after the citation.
     """
     for open_q, close_q in _QUOTE_PAIRS:
-        quoted = f"{open_q}{cliche}{close_q}"
-        if quoted not in line:
+        # Find any quoted span containing `cliche` without crossing another close_q.
+        pattern = re.compile(re.escape(open_q) + r"[^" + re.escape(close_q) + r"\n]*" + re.escape(cliche) + r"[^" + re.escape(close_q) + r"\n]*" + re.escape(close_q))
+        m = pattern.search(line)
+        if not m:
             continue
-        cliche_at = line.find(quoted)
+        cliche_at = m.start()
         for verb in _RULE_VERBS:
             for conn in _RULE_CONNECTORS:
                 marker = f"{verb}{conn}{open_q}"
                 rule_at = line.find(marker)
-                if rule_at == -1 or rule_at >= cliche_at:
+                if rule_at == -1 or rule_at >= cliche_at + 1:
                     continue
                 if not re.search(r"[。！？；\n]", line[rule_at:cliche_at]):
                     return True
@@ -219,10 +223,44 @@ PASTED_MATERIAL_TOKENS = (
 )
 
 
+# Issue #130: Pasted prompt templates / persona cards / spec headers aimed at AI.
+PROMPT_TEMPLATE_RE = re.compile(
+    r"(?:^(?:产品哲学|核心原则|设计哲学|系统原则|通用规则|角色设定|工作流规则|输出规范|提示词模板|评判标准)\s*[:：(（]"
+    r"|^(?:要求|任务要求|注意|限制)\s*[:：]\s*\d+[.、)）]"
+    r"|【(?:核心原则|角色设定|系统提示|输出规范|硬性要求|工作原则|提示词)】"
+    r"|(?:^|[，,。；;\s])(?:你是一位|你是一个|你是一名|你是.{0,12}(?:智能体|助手|专家|委员|顾问|架构师|设计师|老师|工程师)|你输出的所有内容必须)"
+    r"|(?:^|\s)规则[一二三四五六七八九十\d]+\s*[:：])"
+)
+# Issue #130: Single-turn continuation or ephemeral task directives, not durable rules.
+ONE_TURN_DIRECTIVE_RE = re.compile(
+    r"(?:继续上面|接着上面|继续刚才|接着刚才|不要从新开始|不要重新开始|上面没(?:有)?完成的"
+    r"|(?:我觉得这里(?:的话)?|这里的话|这个地方(?:的话)?).{0,12}(?:可以不要|不要了|先不要|去掉|删掉)"
+    r"|这[一二两三四五六七八九十\d]+(?:张|个|份|页|条|块|段).{0,8}(?:必须|不要|不能)"
+    r"|关于解决(?:用户|这个)的问题[,，]?\s*不能"
+    r"|我这里叫你|这里不要取信|考你的(?:设计|能力|审美)"
+    r"|渲染网格|网格数(?:必须)?固定为|像素大小)"
+)
+
+
+def principle_shape(text: str) -> tuple[bool, str]:
+    """Return (is_personal_principle, reject_reason) for a candidate principle sentence."""
+    if PROMPT_TEMPLATE_RE.search(text):
+        return False, "prompt-template"
+    if ONE_TURN_DIRECTIVE_RE.search(text):
+        return False, "one-turn-directive"
+    if DIALOGUE_ADDRESSED_RE.search(text):
+        return False, "dialogue-addressed"
+    return True, ""
+
+
 def rule_shape(text: str) -> tuple[bool, str]:
     """Return (is_durable_rule, reject_reason) for a candidate rule sentence."""
     if not RULE_VERB_RE.search(text):
         return False, "no-rule-verb"
+    if PROMPT_TEMPLATE_RE.search(text):
+        return False, "prompt-template"
+    if ONE_TURN_DIRECTIVE_RE.search(text):
+        return False, "one-turn-directive"
     if TECH_EXCERPT_RE.search(text):
         return False, "technical-excerpt"
     if SINGLE_TASK_RE.search(text):
@@ -295,7 +333,23 @@ SCORE_THRESHOLDS: dict[str, float] = {
     "mainline_unique": 1.0,           # 1 when mainline has <= 1 candidate
 }
 
-_BULLET_PREFIXES = ("- **候选", "- **A级·访谈")
+_BULLET_PREFIXES = ("- **候选", "- **A级·访谈", "- **A级·原话")
+
+
+def _is_interview_bullet(line: str) -> bool:
+    """Return True when a sourced bullet belongs to the A-level interview channel."""
+    return line.startswith("- **A级·访谈") or "_evidence/interview-lines.md" in line
+
+
+def _is_raw_chat_bullet(line: str) -> bool:
+    """Return True when a sourced bullet claims provenance in raw chat exports."""
+    if _is_interview_bullet(line):
+        return False
+    if line.startswith("- **A级·原话"):
+        return True
+    if "来源通道：raw" in line or "_evidence/chat-lines.md" in line:
+        return True
+    return bool(re.search(r"出处\s*[:：]\s*(?:raw/|chat-lines\.md)", line))
 
 
 def _is_sourced_bullet(line: str) -> bool:
@@ -359,9 +413,16 @@ def score_kit(
         if reason:
             unresolved.append(f"{file_name}: {reason}")
             continue
-        # Only A-level claims must be exact in the raw export. B-level candidates
-        # may be a first-pass paraphrase; they are reported separately, not failed.
-        if line.startswith("- **A级·访谈") and raw_text:
+        # Issue #129: strict source-channel isolation.
+        # - A-level interview bullets (`A级·访谈`) are verified against the interview
+        #   evidence digest by `_verify_pending_source` above; they must NEVER be
+        #   searched in chat `raw/` exports (which caused false RAW_ZERO_HIT).
+        # - Chat-sourced bullets (`A级·原话` and `B级·raw` candidates citing
+        #   `_evidence/chat-lines.md` / `raw/`) ARE cross-checked against `raw_text`
+        #   when `--raw-root` (or adjacent `raw/`) is present, catching fabricated quotes.
+        if _is_interview_bullet(line):
+            continue
+        if _is_raw_chat_bullet(line) and raw_text:
             quote = _quote_from_marker(line)
             if quote and not quote_in_raw(quote, raw_text):
                 raw_zero_hits.append(f"{file_name}: RAW_ZERO_HIT")
@@ -374,6 +435,7 @@ def score_kit(
     mainline_count = sum(1 for _name, line in slot_bullets["mainline"] if line.startswith("- **候选"))
     mainline_unique = mainline_count <= 1
 
+    citation_ok = (accuracy >= th["citation_accuracy"]) and (not raw_zero_hits)
     metrics: dict[str, dict[str, object]] = {
         "coverage": {
             "value": coverage, "threshold": th["coverage"], "passed": coverage >= th["coverage"],
@@ -386,7 +448,7 @@ def score_kit(
         },
         "citation_accuracy": {
             "value": accuracy, "threshold": th["citation_accuracy"],
-            "passed": accuracy >= th["citation_accuracy"],
+            "passed": citation_ok,
             "detail": f"引用 {len(checked) - len(unresolved)}/{len(checked)} 可追溯；噪声率 {noise_rate:.2f}"
                       + (f"；raw 零命中 {len(raw_zero_hits)} 条" if raw_zero_hits else "")
                       + (f"；不可追溯：{'; '.join(unresolved[:3])}" if unresolved else ""),
@@ -447,7 +509,7 @@ def audit_semantics(target_dir: pathlib.Path) -> list[SemanticFinding]:
         lines = f02.read_text(encoding="utf-8", errors="replace").splitlines()
         sourced = [
             ln for ln, l in enumerate(lines, 1)
-            if (l.startswith("- **候选") or l.startswith("- **A级·访谈"))
+            if (l.startswith("- **候选") or l.startswith("- **A级·访谈") or l.startswith("- **A级·原话"))
             and "原文" in l and "出处" in l
         ]
         for lineno, line in enumerate(lines, 1):
@@ -572,11 +634,26 @@ def _quote_from_marker(line: str) -> str:
 
 
 def _normalize_quote(text: str) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+    t = unicodedata.normalize("NFKC", text or "")
+    t = t.replace("『", "「").replace("』", "」").replace("｜", "|")
+    t = t.replace("<", "").replace(">", "")
+    return re.sub(r"\s+", "", t)
+
+
+def _extract_json_strings(obj: object, out: list[str]) -> None:
+    if isinstance(obj, str):
+        if obj.strip():
+            out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _extract_json_strings(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _extract_json_strings(v, out)
 
 
 def resolve_raw_root(kit_dir: pathlib.Path, explicit: pathlib.Path | None = None) -> pathlib.Path | None:
-    """Find the raw export directory used to cross-check A-level quotes."""
+    """Find the raw export directory used to cross-check chat-sourced quotes."""
     if explicit:
         candidate = explicit.expanduser().resolve()
         return candidate if candidate.is_dir() else None
@@ -600,15 +677,50 @@ def load_raw_text(raw_root: pathlib.Path | None) -> str:
         if not path.is_file() or path.suffix.lower() not in {".md", ".txt", ".json", ".jsonl"}:
             continue
         try:
-            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+            raw_content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        chunks.append(raw_content)
+        if path.suffix.lower() == ".json":
+            try:
+                _extract_json_strings(json.loads(raw_content), chunks)
+            except json.JSONDecodeError:
+                pass
+        elif path.suffix.lower() == ".jsonl":
+            for ln in raw_content.splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    _extract_json_strings(json.loads(ln), chunks)
+                except json.JSONDecodeError:
+                    pass
     return _normalize_quote("\n".join(chunks))
+
+
+_SANITIZE_MASK_RE = re.compile(r"(?:\(本地路径\)|\(手机号\)|\(证件号\)|\(密钥已隐藏\)|\(待确认\)|未定)")
 
 
 def quote_in_raw(quote: str, raw_text: str) -> bool:
     normalized = _normalize_quote(quote)
-    return bool(normalized) and normalized in raw_text
+    if not normalized:
+        return False
+    if normalized in raw_text:
+        return True
+    # Legitimate PII/uncertainty sanitization in 04_bootstrap_kit.py replaces
+    # paths/phones/uncertain words with fixed masks. If a mask is present, verify
+    # all literal segments appear in order inside raw_text (with at least one >=6 chars).
+    if _SANITIZE_MASK_RE.search(normalized):
+        parts = [p for p in _SANITIZE_MASK_RE.split(normalized) if len(p) >= 2]
+        if parts and any(len(p) >= 6 for p in parts):
+            pos = 0
+            for part in parts:
+                idx = raw_text.find(part, pos)
+                if idx == -1:
+                    return False
+                pos = idx + len(part)
+            return True
+    return False
 
 
 def _verify_pending_source(
@@ -790,8 +902,10 @@ def validate_kit(
         if card.get("raw_zero_hits"):
             diagnostics.append(
                 "RAW_ZERO_HIT: " + "; ".join(card["raw_zero_hits"])
-                + "（A 级原话在 raw 导出里找不到；必须降级或删除，不能继续算 A 级）"
+                + "（声称来自聊天记录的原话在 raw 导出里找不到；必须降级或删除，不能伪造聊天出处）"
             )
+            if raw_root is not None:
+                passed = False
         if enforce_score and not card["overall_passed"]:
             passed = False
 

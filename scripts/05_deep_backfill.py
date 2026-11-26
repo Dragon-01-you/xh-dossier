@@ -146,6 +146,8 @@ CLAUSE_DATE_RE = re.compile(r"20\d{2}[-/年]\d{1,2}")
 class CoverageIndex:
     covered_rec_ids: set[str] = field(default_factory=set)
     terms_by_profile: dict[str, set[str]] = field(default_factory=dict)
+    covered_norm_quotes: list[str] = field(default_factory=list)
+    covered_norm_bodies: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -244,10 +246,43 @@ def safe_profile_target(target: str, profiles_dir: pathlib.Path) -> pathlib.Path
     return actual
 
 
-def build_coverage_index(profiles: dict[str, str]) -> CoverageIndex:
+_DEDUP_PUNCT_RE = re.compile(
+    r"[\s，。！？、；：“”‘’「」『』（）()\[\]【】《》,.!?;:\-_—…/\\|｜·•`~*#\"']+"
+)
+_CHAT_LINE_CITE_RE = re.compile(r"_evidence/chat-lines\.md:(\d+)")
+_KIT_QUOTE_RE = re.compile(
+    r"原文\s*[:：]\s*(?:「(?P<q1>[^」]+)」|“(?P<q2>[^”]+)”|\"(?P<q3>[^\"]+)\")"
+)
+
+
+def _fold_for_dedup(text: str) -> str:
+    """Issue #131: NFKC + strip all punctuation & whitespace + lowercase for L1/L2 dedup."""
+    if not text:
+        return ""
+    t = unicodedata.normalize("NFKC", text)
+    return _DEDUP_PUNCT_RE.sub("", t).lower()
+
+
+def build_coverage_index(
+    profiles: dict[str, str],
+    profiles_dir: pathlib.Path | None = None,
+) -> CoverageIndex:
     idx = CoverageIndex()
+    cited_chat_lines: set[int] = set()
+    seen_quotes: set[str] = set()
     for name, text in profiles.items():
         idx.covered_rec_ids |= set(REC_RE.findall(text))
+        for m in _CHAT_LINE_CITE_RE.finditer(text):
+            cited_chat_lines.add(int(m.group(1)))
+        for qm in _KIT_QUOTE_RE.finditer(text):
+            q = next((v for v in qm.groupdict().values() if v), "")
+            fq = _fold_for_dedup(q)
+            if len(fq) >= 10 and fq not in seen_quotes:
+                seen_quotes.add(fq)
+                idx.covered_norm_quotes.append(fq)
+        folded_body = _fold_for_dedup(text)
+        if folded_body:
+            idx.covered_norm_bodies.append(folded_body)
         # chunk into 4-12 char CJK n-grams as coarse topic terms
         cjk = re.findall(r"[\u4e00-\u9fff]{2,}", text)
         terms: set[str] = set()
@@ -258,7 +293,39 @@ def build_coverage_index(profiles: dict[str, str]) -> CoverageIndex:
                     if not any(sw in g for sw in STOPWORDS):
                         terms.add(g)
         idx.terms_by_profile[name] = terms
+
+    # Resolve cited `_evidence/chat-lines.md:<line>` back to exact REC-xxxx IDs
+    # so L1-bootstrapped kits (which cite line numbers, not raw REC IDs) block L2 duplicates.
+    if profiles_dir is not None and cited_chat_lines:
+        ev_file = profiles_dir / "_evidence" / "chat-lines.md"
+        if ev_file.is_file():
+            ev_rows = ev_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            for lineno in cited_chat_lines:
+                if 1 <= lineno <= len(ev_rows):
+                    idx.covered_rec_ids |= set(REC_RE.findall(ev_rows[lineno - 1]))
     return idx
+
+
+def is_covered_by_kit(
+    rec_id: str,
+    content: str,
+    excerpt: str,
+    coverage: CoverageIndex,
+) -> bool:
+    """Return True when a record or its normalized quote is already present in L1 kit."""
+    if rec_id in coverage.covered_rec_ids:
+        return True
+    for candidate_text in (excerpt, content):
+        folded = _fold_for_dedup(candidate_text)
+        if len(folded) < 12:
+            continue
+        for body in coverage.covered_norm_bodies:
+            if folded in body:
+                return True
+        for q in coverage.covered_norm_quotes:
+            if q in folded or folded in q:
+                return True
+    return False
 
 
 def parse_first_pass(backfill_md: pathlib.Path) -> FirstPassIndex:
@@ -341,8 +408,84 @@ def looks_like_process_talk(content: str) -> tuple[bool, str]:
     return False, ""
 
 
+REFLECTION_CUES = (
+    "复盘", "我做错了", "我发现", "核心问题", "踩坑", "返工", "失败",
+    "白做", "没做出来", "啥也没做出来", "拖了", "错过", "实在", "没发出去",
+    "没上线", "停在最后", "每次都要", "反复", "原则", "必须", "绝不",
+)
+AI_HELP_START_RE = re.compile(
+    r"^(?:请问|帮我看看|帮我讲一下|帮我解释|请帮我|我想问|能否帮我|你可以看一下|能不能帮|为什么|怎么修|怎么解决)"
+)
+PASTED_DOC_MARKERS = ("采集日期：", "采集日期:", "信源体系：", "信源体系:", "参考文献", "全文如下")
+_LICENSE_SPEC_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:BSD-[23]|Apache-?2(?:\.0)?|GPLv?[23]?|LGPL|AGPL|OFL|MPL-2\.0)(?![A-Za-z0-9])"
+)
+_TECH_SPEC_CUES = ("⚠", "✅", "❌", "HTML/CSS", "SVG", "设计 token", "渲染器")
+_TECH_RULE_COMPOUNDS = ("层级规则", "排版规则", "语法规则", "渲染规则", "路由规则", "匹配规则")
+
+
+def looks_like_pasted_document(content: str) -> bool:
+    """Distinguish pasted external reports/code/tables from long spoken personal reflections."""
+    if "```" in content:
+        return True
+    lines = content.splitlines()
+    if sum(1 for ln in lines if re.match(r"^\s*#{1,4}\s+\S", ln)) >= 3:
+        return True
+    if "|---" in content or sum(1 for ln in lines if ln.strip().startswith("|") and ln.count("|") >= 2) >= 3:
+        return True
+    if sum(1 for ln in lines if ln.count("\t") >= 2) >= 2:
+        return True
+    lic_hits = _LICENSE_SPEC_RE.findall(content)
+    if len(lic_hits) >= 2 or (lic_hits and any(cue in content for cue in _TECH_SPEC_CUES)):
+        return True
+    if len(re.findall(r"https?://", content)) >= 2:
+        return True
+    if any(m in content for m in PASTED_DOC_MARKERS):
+        return True
+    code_lines = sum(
+        1 for ln in lines
+        if re.match(r"^(?:\s{4,}\S|Traceback |File \"|\s*[\{\}\[\]];?\s*$)", ln)
+    )
+    if code_lines >= 6:
+        return True
+    return False
+
+
+def is_pure_question_message(content: str) -> bool:
+    """Issue #131: True for pure AI-directed help questions; False for personal reflections
+    that merely include an incidental/rhetorical question sentence."""
+    c = (content or "").strip()
+    if not c or not QUESTION_RE.search(c):
+        return False
+    raw_sents = [s.strip() for s in re.split(r"(?<=[。！？!?\n；;])", c) if s.strip()]
+    if not raw_sents:
+        return True
+
+    decl_sents: list[str] = []
+    q_sents: list[str] = []
+    for s in raw_sents:
+        if s.endswith(("?", "？")) or QUESTION_RE.search(s):
+            q_sents.append(s)
+        else:
+            decl_sents.append(s)
+
+    decl_chars = sum(len(s) for s in decl_sents)
+    total_chars = sum(len(s) for s in raw_sents)
+    has_reflection = any(cue in c for cue in REFLECTION_CUES) and any(m in c for m in EXPERIENCE_MARKERS)
+
+    if AI_HELP_START_RE.search(c) and not (has_reflection and decl_chars >= 60):
+        return True
+    if not decl_sents:
+        return True
+    if has_reflection and decl_chars >= 25:
+        return False
+    if decl_chars >= 40 and decl_chars >= 0.5 * total_chars and any(m in "".join(decl_sents) for m in EXPERIENCE_MARKERS):
+        return False
+    return True
+
+
 def classify_narrative(content: str) -> tuple[bool, str]:
-    """Return (is_personal_experience, reason). Design §4.2.
+    """Return (is_personal_experience, reason). Design §4.2 + Issue #131.
 
     Non-personal cues are matched on the NORMALIZED full text (substring), not
     just on the prefix: pasted prompts / podcast transcripts / summaries can
@@ -352,7 +495,9 @@ def classify_narrative(content: str) -> tuple[bool, str]:
     process_talk, process_reason = looks_like_process_talk(c)
     if process_talk:
         return False, process_reason
-    if len(c) > 600:
+    if looks_like_pasted_document(c):
+        return False, "non_personal:ai_or_material"
+    if len(c) > 2000:
         return False, "non_personal:too_long"
     n = _normalize_text(c)
     if any(tok in n for tok in NON_PERSONAL_PROMPT_TOKENS):
@@ -361,7 +506,7 @@ def classify_narrative(content: str) -> tuple[bool, str]:
         return False, "non_personal:prompt_prefix"
     if any(tok in n for tok in NON_PERSONAL_MATERIAL_TOKENS):
         return False, "non_personal:ai_or_material"
-    if QUESTION_RE.search(c):
+    if is_pure_question_message(c):
         return False, "non_personal:question"
 
     if not any(m in c for m in EXPERIENCE_MARKERS):
@@ -395,8 +540,13 @@ def sentence_signals(sentences: list[str]) -> dict[str, object]:
     filtered: list[str] = []
     # Narrow, unambiguous self-setback cues. Dropped "又没/又要" (too wide —
     # appeared in AI-directed instructions and caused false positives).
-    self_setback_cues = ("没发出去", "没上线", "拖了四天", "错过截止", "实在太累",
-                         "每次都要重新", "反复如此", "停在最后10%")
+    self_setback_cues = (
+        "没发出去", "没上线", "拖了四天", "错过截止", "实在太累",
+        "每次都要重新", "反复如此", "停在最后10%",
+        # Issue #131: real first-person retrospective setbacks
+        "啥也没做出来", "什么都没做出来", "我觉得我做错了", "我做错了",
+        "一开始就错了", "白做了", "踩坑", "反复返工", "分发给别人很难",
+    )
     # Medium cues: could be a self-setback OR an AI-directed complaint. Rules
     # cannot decide — surface these as needs_llm rather than dropping them.
     ambiguous_cues = ("太累", "错过", "拖了", "反复", "每次都要", "没发出去", "没上线")
@@ -404,6 +554,8 @@ def sentence_signals(sentences: list[str]) -> dict[str, object]:
                    "帮我", "给我", "看一下这个", "没太懂", "不太懂", "没听懂你")
     for s in sentences:
         if not any(m in s for m in EXPERIENCE_MARKERS):
+            continue
+        if is_pure_question_message(s):
             continue
         has_user_miss = any(u in s for u in SUBJECT_USER_MISS)
         has_ai_miss = any(a in s for a in SUBJECT_AI_MISS)
@@ -472,7 +624,8 @@ def _topic_overlap(content: str, terms: set[str]) -> int:
 
 
 def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
-                     limit: int = 40) -> list[L2Candidate]:
+                     limit: int = 40,
+                     first_pass: FirstPassIndex | None = None) -> list[L2Candidate]:
     """Opt-in second pass: durable statements not covered by the current kit.
 
     The strict signal pass above only mines self-setbacks. A freshly bootstrapped
@@ -482,8 +635,11 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
     marks every result needs_llm so no rule output is treated as a conclusion.
     """
     money: list[L2Candidate] = []
+    l1_pending = first_pass.pending_rec_ids if first_pass is not None else set()
     for r in records:
         if r["role"] != "user" or r["rec_id"] in coverage.covered_rec_ids:
+            continue
+        if r["rec_id"] in l1_pending:
             continue
         title = _source_title(r["source_file"])
         if any(marker in title for marker in PERSONAL_TITLE_MARKERS):
@@ -501,9 +657,12 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
         text = r["content"]
         if BROAD_META_RE.search(text[:160]):
             continue
+        text_for_rule = text
+        for term in _TECH_RULE_COMPOUNDS:
+            text_for_rule = text_for_rule.replace(term, "")
         scores = {
             "core_fact": sum(2 for c in BROAD_IDENTITY if c in text),
-            "hard_rule": sum(2 for c in BROAD_RULE if c in text),
+            "hard_rule": sum(2 for c in BROAD_RULE if c in text_for_rule),
             "complaint": sum(2 for c in BROAD_PRINCIPLE if c in text),
             "recurring_mistake": sum(2 for c in BROAD_NEGATIVE if c in text),
         }
@@ -516,17 +675,29 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
             "complaint": BROAD_PRINCIPLE,
             "recurring_mistake": BROAD_NEGATIVE,
         }[signal]
-        # Keep one short, self-contained sentence that actually carries the
-        # signal; dumping a 500-char request into the pending zone is noise.
+
+        def _sentence_has_signal_cue(sent: str) -> bool:
+            check = sent
+            if signal == "hard_rule":
+                for term in _TECH_RULE_COMPOUNDS:
+                    check = check.replace(term, "")
+            return any(c in check for c in signal_cues)
+
+        # Keep one short, self-contained declarative sentence that actually carries the
+        # signal; dumping a 500-char request or a rhetorical question is noise.
         sentence = next(
             (s.strip() for s in split_sentences(text)
              if 20 <= len(s.strip()) <= 220
+             and not is_pure_question_message(s)
              and not BROAD_META_RE.search(s)
              and not looks_like_process_talk(s)[0]
-             and any(c in s for c in signal_cues)),
+             and _sentence_has_signal_cue(s)),
             "",
         )
         if not sentence:
+            continue
+        excerpt = re.sub(r"\s+", " ", sentence)[:220]
+        if is_covered_by_kit(r["rec_id"], text, excerpt, coverage):
             continue
         target, anchor = PROFILE_SECTION_MAP[signal]
         if signal == "core_fact":
@@ -539,7 +710,7 @@ def broad_candidates(records: list[dict[str, str]], coverage: CoverageIndex,
             target_profile=target,
             section_anchor=anchor,
             evidence=f"broad_cue_score={score}; 规则法候选，需语义复核",
-            excerpt=re.sub(r"\s+", " ", sentence)[:220],
+            excerpt=excerpt,
             source_file=r["source_file"],
             phrase_hits=score,
             needs_llm=True,
@@ -581,8 +752,9 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
             else:
                 dropped.append({"rec_id": r["rec_id"], "reason": "no_self_setback_signal"})
             continue
-        # C0 — already in profiles
-        if r["rec_id"] in coverage.covered_rec_ids:
+        # C0 — already in profiles (by rec_id OR punctuation-folded text)
+        excerpt_preview = re.sub(r"\s+", " ", r["content"])[:200]
+        if is_covered_by_kit(r["rec_id"], r["content"], excerpt_preview, coverage):
             dropped.append({"rec_id": r["rec_id"], "reason": "C0_covered_by_profile"})
             continue
         covered_any = any(_topic_overlap(r["content"], terms) >= 2
@@ -597,7 +769,7 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
             dropped.append({"rec_id": r["rec_id"], "reason": "C2_claimed_by_L1_pattern"})
             continue
 
-        if signals["mistake"] or "踩坑" in r["content"] or any(p in r["content"] for p in ("改细节", "没上线", "停在最后")):
+        if signals["mistake"] or "踩坑" in r["content"] or any(p in r["content"] for p in ("改细节", "没上线", "停在最后", "做错了", "啥也没做出来")):
             stype = "recurring_mistake"
         elif "放弃" in r["content"] or "彻底" in r["content"]:
             stype = "core_fact"
@@ -608,7 +780,7 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
         else:
             stype = "complaint"
         target, anchor = PROFILE_SECTION_MAP[stype]
-        excerpt = re.sub(r"\s+", " ", r["content"])[:200]
+        excerpt = excerpt_preview
         phrase_hits = sum(1 for p in repeated_texts if p in r["content"])
         evidence = (f"抱怨{int(signals['complaint'])}/错误{int(signals['mistake'])}; "
                     f"门禁过滤={','.join(str(x) for x in signals['filtered']) or '无'}; "
@@ -636,7 +808,10 @@ def coverage_decide(records: list[dict[str, str]], coverage: CoverageIndex,
     # Broad mode is opt-in and additive; strict candidates keep priority in rank.
     if broad:
         existing_ids = {c.rec_id for c in candidates}
-        candidates.extend(c for c in broad_candidates(records, coverage) if c.rec_id not in existing_ids)
+        candidates.extend(
+            c for c in broad_candidates(records, coverage, first_pass=first_pass)
+            if c.rec_id not in existing_ids
+        )
     # F5 (partial): cross-document phrase hits drive candidate RANKING (first
     # class sort key) and the evidence field. Inclusion/exclusion still rests
     # on the complaint/mistake cues; phrase mining alone does not yet admit a
@@ -840,7 +1015,7 @@ def run_deep_backfill(profiles_dir: pathlib.Path, first_pass_md: pathlib.Path,
                       db_path: pathlib.Path, out_dir: pathlib.Path,
                       broad: bool = False) -> dict:
     profiles = load_profiles(profiles_dir)
-    coverage = build_coverage_index(profiles)
+    coverage = build_coverage_index(profiles, profiles_dir=profiles_dir)
     fp = parse_first_pass(first_pass_md)   # will raise if missing — mandatory input
     records = load_records(db_path)
     candidates, dropped, cross_refs = coverage_decide(records, coverage, fp, broad=broad)

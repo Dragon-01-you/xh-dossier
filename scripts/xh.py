@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -121,6 +122,159 @@ def _run(args: list[str]) -> int:
     proc = subprocess.run(args, cwd=str(ROOT), text=True)
     print("EXIT:", proc.returncode)
     return proc.returncode
+
+
+def _run_capture(args: list[str]) -> tuple[int, str]:
+    """Run a step, echo its output verbatim, and return (exit_code, stdout_text)."""
+    print("RUN:", " ".join(args))
+    proc = subprocess.run(
+        args,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.stdout:
+        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+    if proc.stderr:
+        print(proc.stderr, end="" if proc.stderr.endswith("\n") else "\n", file=sys.stderr)
+    print("EXIT:", proc.returncode)
+    return proc.returncode, (proc.stdout or "")
+
+
+def _format_reason_map(reasons: dict[str, int]) -> str:
+    if not reasons:
+        return "无"
+    top = sorted(reasons.items(), key=lambda kv: (-int(kv[1]), kv[0]))[:6]
+    return "，".join(f"{k}={v}" for k, v in top)
+
+
+def _render_build_summary(
+    *,
+    ingest_out: str,
+    match_out: str,
+    l2_out: str,
+    graph_out: str,
+    validate_out: str,
+    validate_ok: bool,
+    kit_base: pathlib.Path,
+    kit_final: pathlib.Path,
+    l2_dir: pathlib.Path,
+    interview: pathlib.Path | None,
+) -> str:
+    """Issue #130: Render a 10-second human-readable stage conversion summary."""
+    # Step 1: ingest
+    m_idx = re.search(r"INDEX_OK\s+total_raw=(\d+)\s+dedup_skipped=(\d+)\s+indexed=(\d+)", ingest_out)
+    raw_total = int(m_idx.group(1)) if m_idx else 0
+    dedup_skip = int(m_idx.group(2)) if m_idx else 0
+    indexed_n = int(m_idx.group(3)) if m_idx else 0
+
+    # Step 2: four-way match
+    m_fw = re.search(r"FOUR_WAY_OK\s+records=(\d+)\s+clusters=(\d+)", match_out)
+    fw_clusters = int(m_fw.group(2)) if m_fw else 0
+
+    # Step 3: L1 bootstrap stats (read from kit_base/_evidence/build-stats.json)
+    stats_file = kit_base / "_evidence" / "build-stats.json"
+    bstats: dict[str, object] = {}
+    if stats_file.is_file():
+        try:
+            bstats = json.loads(stats_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            bstats = {}
+    user_rows = int(bstats.get("user_rows", 0))
+    usable_n = int(bstats.get("usable_records", 0))
+    l1_filtered = bstats.get("filtered_by_reason", {}) if isinstance(bstats.get("filtered_by_reason"), dict) else {}
+    l1_sections = bstats.get("sections", {}) if isinstance(bstats.get("sections"), dict) else {}
+    iv_facts = int(bstats.get("interview_facts", 0))
+    iv_warn = str(bstats.get("interview_warning", "") or "")
+    highlights = list(bstats.get("highlights", [])) if isinstance(bstats.get("highlights"), list) else []
+
+    # Step 4: L2 backfill
+    m_l2 = re.search(
+        r"L2_BACKFILL_OK\s+records=(\d+)\s+personal_records=(\d+)\s+candidates=(\d+)\s+dropped=(\d+)\s+cross_ref_L1=(\d+)",
+        l2_out,
+    )
+    l2_personal = int(m_l2.group(2)) if m_l2 else 0
+    l2_cands = int(m_l2.group(3)) if m_l2 else 0
+    l2_dropped = int(m_l2.group(4)) if m_l2 else 0
+    l2_xref = int(m_l2.group(5)) if m_l2 else 0
+    l2_reasons: dict[str, int] = {}
+    m_dr = re.search(r"dropped_by_reason=(\{.*\})", l2_out)
+    if m_dr:
+        try:
+            l2_reasons = json.loads(m_dr.group(1))
+        except json.JSONDecodeError:
+            l2_reasons = {}
+
+    # Sample L2 titles/excerpts
+    l2_preview: list[str] = []
+    l2_md = l2_dir / "l2_candidates.md"
+    if l2_md.is_file():
+        for ln in l2_md.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ln.startswith("- **原文摘录**：> "):
+                l2_preview.append(f"[L2待确认] {ln.split('> ', 1)[1][:80]}")
+                if len(l2_preview) >= 3:
+                    break
+
+    # Step 5: graph
+    m_gr = re.search(r"GRAPH_BUILD\s+(\{.*\})", graph_out)
+    gr_summary = "已跳过（--skip-retrieval）"
+    if m_gr:
+        try:
+            gd = json.loads(m_gr.group(1))
+            gr_summary = f"实体 {gd.get('entities', 0)} 个 / 关系边 {gd.get('edges', 0)} 条（否定拦截 {gd.get('negation_skipped', 0)} 条）"
+        except json.JSONDecodeError:
+            gr_summary = "已完成"
+
+    # Step 6: validate scorecard lines
+    sc_lines = [ln.strip() for ln in validate_out.splitlines() if ln.strip().startswith("- [")]
+
+    l1_out_desc = (
+        f"访谈 A 级 {iv_facts} 条；raw B 级（身份 {l1_sections.get('identity', 0)} / "
+        f"主线 {l1_sections.get('mainline', 0)} / 准则 {l1_sections.get('principles', 0)} / "
+        f"规则 {l1_sections.get('rules', 0)} / 正例 {l1_sections.get('positive', 0)} / "
+        f"反例 {l1_sections.get('negative', 0)}）"
+    )
+    lines = [
+        "# XH-Dossier 阶段转化摘要（PIPELINE_SUMMARY）",
+        "",
+        f"> 生成时间：{_now()} ｜ 交付目录：`{kit_final}` ｜ 严格验收：`{'VALIDATE_OK' if validate_ok else 'VALIDATE_FAIL'}`",
+        "",
+        "## 一、每步目标与数量转化（输入 → 过滤 → 产出）",
+        "",
+        "| 步骤 | 设计目标 | 输入数 | 按原因过滤数 | 实际产出 |",
+        "|---|---|---|---|---|",
+        f"| 1. 冷库清洗入库 | 原始导出只读入 SQLite 并去重 | {raw_total} 条原始记录 | 去重跳过={dedup_skip} | 入库 {indexed_n} 条（四路聚簇 {fw_clusters} 簇） |",
+        f"| 2. L1 访谈校准与初稿 | 吸收 A 级访谈、过滤杂句生成 6 份初稿 | {user_rows} 条本人消息"
+        + (f" + 访谈输入" if interview else "")
+        + f" | {_format_reason_map(l1_filtered)} | 可用 {usable_n} 段 → {l1_out_desc} |",
+        f"| 3. L2 差集挖掘 | 找回 6 份档案未覆盖的本人遗漏经验 | {l2_personal} 条本人消息 | 共拦截 {l2_dropped}（{_format_reason_map(l2_reasons)}） | 新增待确认候选 {l2_cands} 条（与 L1 交叉引用 {l2_xref} 条） |",
+        f"| 4. 时间线与图索引 | 辅助多跳与双时态溯源检索 | {indexed_n} 条冷库记录 | 仅作辅助检索，不覆写 6 份 | {gr_summary} |",
+        f"| 5. 严格结构与语义验收 | 核对出处、占位符、水话、PII 与评分卡 | 6 份档案 | — | {'VALIDATE_OK' if validate_ok else 'VALIDATE_FAIL'} |",
+        "",
+    ]
+    if iv_warn:
+        lines += [f"> ⚠️ {iv_warn}", ""]
+    if sc_lines:
+        lines += ["## 二、评分卡结论", ""] + sc_lines + [""]
+    lines += ["## 三、本次挖出的关键条目预览", ""]
+    preview = highlights + l2_preview
+    if preview:
+        for item in preview[:8]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- （本轮样本较薄，暂无新增预览条目，建议补充访谈或更多导出记录）")
+    lines += [
+        "",
+        "## 四、待本人确认动作清单（机器不代签字）",
+        "",
+        f"1. 打开 `{kit_final}` 核对带 `[待确认]` 的冲突与候选条目（原文行号在 `_evidence/`）。",
+        f"2. 查看 `{l2_dir / 'l2_candidates.md'}` 中 {l2_cands} 条 L2 候选，确认是否亲历、是否值得升格。",
+        f"3. 复核无误后由本人执行签字回执：`python -X utf8 scripts/xh.py review --confirm --kit {kit_final}`。",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _script(name: str) -> pathlib.Path:
@@ -334,7 +488,8 @@ def build(args: argparse.Namespace) -> int:
     """One-command chain: raw chat -> index -> match -> 6-file draft -> L2 proposal -> validate."""
     raw = pathlib.Path(args.raw).expanduser()
     db = pathlib.Path(args.db).expanduser()
-    kit = pathlib.Path(args.kit).expanduser()
+    kit_base = pathlib.Path(args.kit).expanduser()
+    kit = kit_base
     l2 = pathlib.Path(args.l2).expanduser()
     report = pathlib.Path(args.report).expanduser()
     interview = pathlib.Path(args.interview).expanduser() if args.interview else None
@@ -342,32 +497,45 @@ def build(args: argparse.Namespace) -> int:
                       "--db", str(db), "--out", str(kit)]
     if interview is not None:
         bootstrap_cmd += ["--interview", str(interview)]
-    steps = [
-        [sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")),
-         "--raw", str(raw), "--db", str(db), "--query", args.query],
-        [sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
-         "--db", str(db), "--out", str(report)],
-        bootstrap_cmd,
-    ]
-    for step in steps:
-        rc = _run(step)
-        if rc != 0:
-            return rc
+
+    rc, ingest_out = _run_capture([
+        sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")),
+        "--raw", str(raw), "--db", str(db), "--query", args.query,
+    ])
+    if rc != 0:
+        return rc
+    rc, match_out = _run_capture([
+        sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
+        "--db", str(db), "--out", str(report),
+    ])
+    if rc != 0:
+        return rc
+    rc, _boot_out = _run_capture(bootstrap_cmd)
+    if rc != 0:
+        return rc
+
+    l2_out = ""
     backfill_script = _script("05_deep_backfill.py")
     if backfill_script.is_file():
-        rc = _run([sys.executable, "-X", "utf8", str(backfill_script),
-                   "--profiles", str(kit), "--first-pass", str(report),
-                   "--db", str(db), "--out", str(l2), "--broad"])
+        rc, l2_out = _run_capture([
+            sys.executable, "-X", "utf8", str(backfill_script),
+            "--profiles", str(kit), "--first-pass", str(report),
+            "--db", str(db), "--out", str(l2), "--broad",
+        ])
         if rc != 0:
             return rc
     apply_script = _script("08_l2_apply.py")
     if args.apply_unsigned and apply_script.is_file() and (l2 / "l2_profile_patches").is_dir():
         kit_next = pathlib.Path(args.kit_next).expanduser() if args.kit_next else kit.parent / "kit_next"
-        rc = _run([sys.executable, "-X", "utf8", str(apply_script),
-                   "--kit", str(kit), "--l2", str(l2), "--out", str(kit_next)])
+        rc, _apply_out = _run_capture([
+            sys.executable, "-X", "utf8", str(apply_script),
+            "--kit", str(kit), "--l2", str(l2), "--out", str(kit_next),
+        ])
         if rc != 0:
             return rc
         kit = kit_next
+
+    graph_out = ""
     if not args.skip_retrieval and all(_script(n).is_file() for n in ("05_temporal_index.py", "06_graph_index.py", "07_recall_time_graph.py")):
         for step in (
             [sys.executable, "-X", "utf8", str(_script("05_temporal_index.py")), "--db", str(db), "--action", "backfill"],
@@ -376,18 +544,43 @@ def build(args: argparse.Namespace) -> int:
             [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--entity", "Python", "--limit", "5"],
             [sys.executable, "-X", "utf8", str(_script("07_recall_time_graph.py")), "--db", str(db), "--keyword", str(args.query), "--limit", "5"],
         ):
-            rc = _run(step)
+            rc, step_out = _run_capture(step)
+            if "06_graph_index.py" in step[3]:
+                graph_out = step_out
             if rc != 0:
                 return rc
-    rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
-               "--target", str(kit), "--strict"]
-              + (["--enforce-score"] if getattr(args, "enforce_score", False) else []))
+    rc, validate_out = _run_capture(
+        [sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
+         "--target", str(kit), "--strict"]
+        + (["--enforce-score"] if getattr(args, "enforce_score", False) else [])
+    )
     # Issue #90: a fresh draft is always pending personal review; confirmation
     # is a separate human action (`review --confirm`), never an Agent step.
     _write_review_status(kit, REVIEW_PENDING, note="fresh build; pending personal review")
+
+    # Issue #130: render & persist human-readable stage conversion summary.
+    summary_text = _render_build_summary(
+        ingest_out=ingest_out,
+        match_out=match_out,
+        l2_out=l2_out,
+        graph_out=graph_out,
+        validate_out=validate_out,
+        validate_ok=(rc == 0),
+        kit_base=kit_base,
+        kit_final=kit,
+        l2_dir=l2,
+        interview=interview,
+    )
+    summary_path = kit_base.parent / "build_summary.md"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(summary_text, encoding="utf-8")
+    print(summary_text)
+    print("summary:", summary_path)
+
     # Keep the legacy state names from the ticket: pending_review / reviewed.
     payload = _receipt("build", rc == 0, raw=str(raw), db=str(db), kit=str(kit), l2=str(l2),
                         report=str(report), interview=str(interview) if interview else None,
+                        summary=str(summary_path),
                         review_status=REVIEW_PENDING)
     path = _write_receipt("build", payload)
     print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
