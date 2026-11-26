@@ -32,14 +32,12 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 VALIDATOR = importlib.import_module("03_validate_kit")
+BACKFILL = importlib.import_module("05_deep_backfill")
 
 EVIDENCE_REL = pathlib.Path("_evidence") / "l2-lines.md"
-# Issue #94: a question to the AI stays out of the pending zone; it is counted
-# as skipped rather than promoted to an unsigned candidate.
-QUESTION_RE = re.compile(
-    r"(是不是|能不能|可不可以|有没有|在哪里|什么形式|怎么回事|为何|能否|"
-    r"还是说|你可以看一下|请问|哪些|什么区别|什么意思|[？?])"
-)
+# Issue #94 + #131: pure AI-directed questions stay out of the pending zone,
+# while multi-sentence personal reflections with an incidental rhetorical `?` pass.
+QUESTION_RE = BACKFILL.QUESTION_RE
 BLOCK_RE = re.compile(
     r"###\s*(?P<cid>L2-\d{4})\s*\[待确认\].*?"
     r"\*\*原文摘录\*\*：>\s*(?P<excerpt>[^\n]+)",
@@ -102,7 +100,7 @@ def apply_unsigned(kit: pathlib.Path, l2_dir: pathlib.Path, out_kit: pathlib.Pat
             continue
         numbered[target] = []
         for cid, excerpt in blocks:
-            if QUESTION_RE.search(excerpt):
+            if BACKFILL.is_pure_question_message(excerpt):
                 question_skipped += 1
                 continue
             numbered[target].append((cid, excerpt, lineno))
