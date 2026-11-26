@@ -893,6 +893,19 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
             legacy.unlink()
 
     ok, messages = VALIDATOR.validate_kit(out_dir, strict=True)
+    interview_warning = ""
+    if interview is not None and bundle.is_empty():
+        iv_path = pathlib.Path(interview).expanduser()
+        if not iv_path.exists():
+            interview_warning = (
+                f"INTERVIEW_WARN: 显式传入的访谈路径不存在（{iv_path}），"
+                "本次初稿未吸收任何访谈 A 级条目，请核对路径。"
+            )
+        else:
+            interview_warning = (
+                f"INTERVIEW_WARN: 显式传入了访谈路径（{iv_path}），但解析出 0 条有效事实"
+                "（文件可能为空或格式未识别），本次初稿未包含访谈 A 级基准，请检查访谈文档格式。"
+            )
     return {
         "records": len(records),
         "sections": {
@@ -904,6 +917,7 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
         },
         "interview_facts": len(bundle.facts),
         "interview_sources": bundle.source_files,
+        "interview_warning": interview_warning,
         "validate_ok": ok,
         "validate_messages": messages,
         "evidence": str(out_dir / EVIDENCE_REL),
@@ -943,6 +957,8 @@ def main() -> int:
     print("BOOTSTRAP_OK " + " ".join(f"{k}={v}" for k, v in res["sections"].items()))
     if res["interview_facts"]:
         print(f"INTERVIEW_OK facts={res['interview_facts']} sources={','.join(res['interview_sources'])}")
+    elif res.get("interview_warning"):
+        print(res["interview_warning"])
     print(f"records={res['records']} evidence={res['evidence']}")
     if res["validate_ok"]:
         print("VALIDATE_OK")
