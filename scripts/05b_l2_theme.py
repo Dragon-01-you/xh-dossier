@@ -147,7 +147,17 @@ PROMPT_MARKERS = (
     "请以", "请写", "请生成", "角色设定", "扮演", "分点作答", "目录结构",
     "参考文献", "要求如下", "以下要求",
 )
-NUMBERED_RE = re.compile(r"^\s*[0-9]+[.、)）]\s*")
+# A task brief handed to the AI reads like a spec, not like a person stating a
+# standard: second-person directive, section numbering, "要求：", "模块 N".
+AI_DIRECTIVE_RE = re.compile(
+    r"(^|[，。：；、\s])(你|您)(需要|要|必须|得|应该|可以|不要|不能)"
+    r"|你的(最终|产出|任务|回答|输出|报告|方案|具体)"
+)
+STRUCT_MARK_RE = re.compile(
+    r"^(?:\*\*)?(?:[（(][0-9a-z一二三四五六七八九十][）)]|[0-9]+[.、)）]"
+    r"|要求：|要求如下|模块\s*[0-9一二三四五六七八九十])"
+)
+LIST_HEAD_RE = re.compile(r"[：:]\s*1[.、)）]")
 FIRST_PERSON = ("我", "本人", "我们")
 RULE_WORDS = ("必须", "不要", "禁止", "绝不", "不能", "别")
 
@@ -155,14 +165,16 @@ RULE_WORDS = ("必须", "不要", "禁止", "绝不", "不能", "别")
 def classify_evidence(sentence: str) -> str:
     """One of personal_on_topic / prompt_or_external / off_topic.
 
-    Deliberately rule-based and conservative: a pasted prompt that carries
-    formatting words and no first person is external material, even when it
-    contains "不要".
+    Rule-based on purpose: a pasted brief can mention "我" and still be a
+    template, so second-person directives, section numbering and formatting
+    words are checked before the first-person fallback.
     """
     s = sentence.strip()
     first_person = any(w in s for w in FIRST_PERSON)
     has_rule = any(w in s for w in RULE_WORDS)
-    if not first_person and (any(m in s for m in PROMPT_MARKERS) or NUMBERED_RE.match(s)):
+    if AI_DIRECTIVE_RE.search(s) or STRUCT_MARK_RE.search(s) or LIST_HEAD_RE.search(s):
+        return "prompt_or_external"
+    if not first_person and any(m in s for m in PROMPT_MARKERS):
         return "prompt_or_external"
     if _is_question(s) or _is_ai_directed(s):
         return "off_topic"
