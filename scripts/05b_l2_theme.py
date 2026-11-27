@@ -139,6 +139,39 @@ def _has_secret(content: str) -> bool:
     return bool(re.search(r"(?i)(secretid|secretkey|AKID|sk-|api[_-]?key)", content))
 
 
+# Evidence classes (issue #147): "source files hit" is NOT the same as
+# "conversations where the user actually said this". A pasted prompt template
+# can mention the same words in six files and still be zero personal evidence.
+PROMPT_MARKERS = (
+    "字之间", "字左右", "不少于", "不超过", "字数", "输出格式", "格式要求",
+    "请以", "请写", "请生成", "角色设定", "扮演", "分点作答", "目录结构",
+    "参考文献", "要求如下", "以下要求",
+)
+NUMBERED_RE = re.compile(r"^\s*[0-9]+[.、)）]\s*")
+FIRST_PERSON = ("我", "本人", "我们")
+RULE_WORDS = ("必须", "不要", "禁止", "绝不", "不能", "别")
+
+
+def classify_evidence(sentence: str) -> str:
+    """One of personal_on_topic / prompt_or_external / off_topic.
+
+    Deliberately rule-based and conservative: a pasted prompt that carries
+    formatting words and no first person is external material, even when it
+    contains "不要".
+    """
+    s = sentence.strip()
+    first_person = any(w in s for w in FIRST_PERSON)
+    has_rule = any(w in s for w in RULE_WORDS)
+    if not first_person and (any(m in s for m in PROMPT_MARKERS) or NUMBERED_RE.match(s)):
+        return "prompt_or_external"
+    if _is_question(s) or _is_ai_directed(s):
+        return "off_topic"
+    if not first_person and not has_rule:
+        return "off_topic"
+    return "personal_on_topic"
+
+
+
 def pick_sentence(theme: Theme, content: str) -> str | None:
     """Return one verbatim sentence carrying the theme cue, or None."""
     content = _clean(content)
@@ -188,20 +221,42 @@ def mine_themes(records: list[dict[str, str]], profiles: dict[str, str],
             sentence = pick_sentence(theme, r["content"])
             if sentence:
                 hit_rows.append((r, sentence))
-        docs = {r["source_file"] for r, _ in hit_rows}
-        if len(docs) < min_docs or len(hit_rows) < 2:
+        classified = [(r, sentence, classify_evidence(sentence)) for r, sentence in hit_rows]
+        personal_rows = [(r, s) for r, s, label in classified if label == "personal_on_topic"]
+        personal_docs = {r["source_file"] for r, _ in personal_rows}
+        source_file_hits = {r["source_file"] for r, _, _ in classified}
+        class_counts = {
+            label: sum(1 for _r, _s, lab in classified if lab == label)
+            for label in ("personal_on_topic", "prompt_or_external", "off_topic")
+        }
+        if len(personal_docs) < min_docs or len(personal_rows) < 2:
+            if hit_rows:  # themes with zero hits stay silent, not rejected
+                dropped.append({
+                "rec_id": personal_rows[0][0]["rec_id"] if personal_rows else "",
+                "theme": theme.theme_id,
+                "reason": "C2_insufficient_personal_evidence",
+                "personal_docs": len(personal_docs),
+                "source_file_hits": len(source_file_hits),
+                "classified": class_counts,
+            })
             continue
         # Best excerpt: shortest sentence with the highest cue count; keeps the
         # candidate readable and avoids pasting a 200-char wall.
         def score(pair: tuple[dict[str, str], str]) -> tuple[int, int]:
             s = pair[1]
             return (sum(1 for c in theme.cues if c in s), -len(s))
-        best = sorted(hit_rows, key=score, reverse=True)[0]
-        # Evidence list: at most 4 records, each with a redacted excerpt.
-        evidence_rows = hit_rows[:4]
-        evidence = "跨对话复现 docs={} ｜ records={} ｜ 命中={}".format(
-            len(docs), ",".join(r["rec_id"] for r, _ in evidence_rows),
+        best = sorted(personal_rows, key=score, reverse=True)[0]
+        # Evidence list: at most 4 personal records, each with a redacted excerpt.
+        evidence_rows = personal_rows[:4]
+        evidence = (
+            "跨对话复现 personal_docs={} ｜ source_file_hits={} ｜ records={} ｜ 命中={} ｜ "
+            "分类 personal={}/prompt_or_external={}/off_topic={}"
+        ).format(
+            len(personal_docs), len(source_file_hits),
+            ",".join(r["rec_id"] for r, _ in evidence_rows),
             theme.evidence_label,
+            class_counts["personal_on_topic"], class_counts["prompt_or_external"],
+            class_counts["off_topic"],
         )
         counter += 1
         candidates.append(l2.L2Candidate(
@@ -213,7 +268,7 @@ def mine_themes(records: list[dict[str, str]], profiles: dict[str, str],
             section_anchor=theme.section_anchor,
             evidence=evidence,
             excerpt=_clean(best[1])[:220],
-            source_file="; ".join(sorted(docs))[:240],
+            source_file="; ".join(sorted(personal_docs))[:240],
             cross_ref="none",
             phrase_hits=len(hit_rows),
             needs_llm=True,
@@ -241,6 +296,23 @@ def render_theme_report(candidates: list[l2.L2Candidate], dropped: list[dict[str
             "",
         ])
     if dropped:
+        rejected = [d for d in dropped if d["reason"] == "C2_insufficient_personal_evidence"]
+        if rejected:
+            lines.extend([
+                "## 附：打回候选（本人对题证据不足）",
+                "",
+                "| 主题 | 本人对题来源对话 | 来源文件命中 | 分类（本人/模板/跑题） |",
+                "|---|---|---|---|",
+            ])
+            for d in rejected:
+                c = d.get("classified", {})
+                lines.append(
+                    f"| `{d['theme']}` | {d.get('personal_docs', 0)} | "
+                    f"{d.get('source_file_hits', 0)} | "
+                    f"{c.get('personal_on_topic', 0)}/"
+                    f"{c.get('prompt_or_external', 0)}/{c.get('off_topic', 0)} |"
+                )
+            lines.append("")
         lines.extend(["## 附：未进入候选的理由计数", ""])
         counts: dict[str, int] = {}
         for d in dropped:
