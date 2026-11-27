@@ -1,6 +1,6 @@
-# XH-Dossier · 跨平台 AI 入职说明书全流程开源包
+# XH-Dossier · 跨平台 AI 上下文收敛工具（产出 6 份待本人签字档案）
 
-> 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移个人 Memory（入职档案）**。
+> 把散落在二三十个聊天窗口里的 Context（眼前临时桌面），收敛为随身携带的 **6 份可迁移 Memory（待本人签字的档案）**。
 > 适用于 **任何本地 Agent**（Antigravity / Claude Code / Codex / Cursor / Hermes）以及 **网页端对话模型**（豆包 / DeepSeek / ChatGPT / Kimi）。
 
 [![CI](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml/badge.svg)](https://github.com/Dragon-01-you/xh-dossier/actions/workflows/ci.yml)
@@ -11,12 +11,12 @@
 ## 一、为什么常有人疑惑“到底是 5 份还是 6 份”？
 
 ```text
-整套说明书 = 1 份 AI 总规矩 + 5 份个人核心档案（共 6 份文件）
+整套档案 = 1 份 AI 合作规矩 + 5 份本人核心档案（共 6 份文件）
   ├── AGENTS.md                 ← 给 AI 看的合作站位、防瞎编底线与工作协议
   └── 5 份个人核心档案（00~04）
         ├── 00-总入口索引.md    ← 读取顺序 + 外部知识库指向
         ├── 01-身份与当前主线.md ← 稳定个人事实 + 当前专注主线 + 彻底放弃项
-        ├── 02-核心判断准则.md   ← 遇事怎么取舍（全包最核心的一份）
+        ├── 02-核心判断准则.md   ← 遇事怎么取舍（全套最核心的一份）
         ├── 03-硬规则与表达黑话.md ← 说话习惯 + 常见别名/语音口误词典
         └── 04-正反例避坑账.md   ← 试过有效的正例 + 必拦截的真实踩坑反例
 ```
@@ -62,7 +62,7 @@
 4. **跨簇模式磁铁 + 防误报门禁**：回原空间全盘扫描重复踩坑，自动拦截**主宾反转**（“我没听懂” vs “你没理解我”）与**否定词钝感**（“先别做” vs “直接做”），按分层抽样导出带 `[REC-xxxx]` 原文编号的 `backfill_candidates.md` 供人核实回填。
 
 ### Stage 4：6 件套验收与跨端挂载
-- 使用 [templates/](templates/) 中的 6 份空白模板（1 份 `AGENTS.md` + 5 份个人档案 `00~04`）定稿自己的手册，并用 `python -X utf8 scripts/03_validate_kit.py --target <目录> --strict` 检查是否还有未填占位符、空话或本地路径隐私泄露。
+- 使用 [templates/](templates/) 中的 6 份空白模板（1 份 `AGENTS.md` + 5 份本人档案 `00~04`）定稿自己的 6 份档案，并用 `python -X utf8 scripts/03_validate_kit.py --target <目录> --strict` 检查是否还有未填占位符、空话或本地路径隐私泄露。
 
 ---
 
@@ -155,4 +155,4 @@ python -m pytest -v
 ## 四、给其他 AI / Agent 使用本仓库的接入方式
 
 - **仓库自带工程规范**：根目录已按 [AGENTS.md](AGENTS.md)、[GLOSSARY.md](GLOSSARY.md)、[docs/adr/](docs/adr/) 与 `.scratch/` 约定配齐。
-- **任意本地 Agent 接管**：告诉它：“请读取仓库根目录的 `AGENTS.md` 与 `skills/onboarding-interviewer/SKILL.md`，带我跑完个人入职说明书建档、清洗并运行 `03_validate_kit.py` 验收。”
+- **任意本地 Agent 接管**：告诉它：“请读取仓库根目录的 `AGENTS.md` 与 `skills/onboarding-interviewer/SKILL.md`，带我跑完 6 份档案的访谈建档、清洗并运行 `03_validate_kit.py` 验收。”
