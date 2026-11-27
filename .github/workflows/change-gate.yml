@@ -1,0 +1,27 @@
+name: Change gate
+
+on:
+  pull_request:
+
+jobs:
+  before-after-ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require before/after ledger for every script change
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff --name-status "FETCH_HEAD...HEAD" > /tmp/changed.txt
+          cat /tmp/changed.txt
+          python -X utf8 scripts/15_change_gate.py --changed /tmp/changed.txt
+
+      - name: Gate self-test
+        run: python -X utf8 -m pytest tests/test_change_gate.py -q
