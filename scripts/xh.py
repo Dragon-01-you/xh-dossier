@@ -11,6 +11,7 @@ Design goals:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import pathlib
 import shutil
@@ -21,6 +22,8 @@ import zipfile
 from datetime import datetime, timezone, timedelta
 
 from archive_io import diagnose_missing, encoding_error_message
+
+audit = importlib.import_module("12_pipeline_audit")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORK = ROOT / "work"
@@ -363,6 +366,23 @@ def build(args: argparse.Namespace) -> int:
     l2 = pathlib.Path(args.l2).expanduser()
     report = pathlib.Path(args.report).expanduser()
     interview = pathlib.Path(args.interview).expanduser() if args.interview else None
+    ledger = pathlib.Path(args.ledger).expanduser() if getattr(args, "ledger", None) else None
+    run_id = audit.new_run_id() if ledger else ""
+
+    def _recorded(cmd: list[str], *, name: str | None = None,
+                  input_count: int | None = None, output_fn=None, note: str = "",
+                  same_unit: bool = True) -> int:
+        """Run one step, and (when --ledger is set) append its row to the ledger."""
+        step_name = name or pathlib.Path(cmd[3]).stem
+        if ledger is None:
+            return _run(cmd)
+        rc, _row = audit.run_and_record(
+            cmd, ledger=ledger, run_id=run_id, step=step_name,
+            input_count=input_count, output_count_fn=output_fn, note=note,
+            same_unit=same_unit,
+        )
+        return rc
+
     if interview is None and not getattr(args, "no_interview", False):
         detected = _detect_interview_dir(raw, kit)
         if detected is not None:
@@ -393,7 +413,20 @@ def build(args: argparse.Namespace) -> int:
         bootstrap_cmd,
     ]
     for step in steps:
-        rc = _run(step)
+        name = pathlib.Path(step[3]).stem
+        if name == "01_clean_and_index":
+            rc = _recorded(step, input_count=audit.count_files(raw),
+                           output_fn=lambda: audit.count_rows(db),
+                           note="raw files -> db rows")
+        elif name == "04_bootstrap_kit":
+            rc = _recorded(step, input_count=audit.count_rows(db),
+                           output_fn=lambda: audit.count_md(kit),
+                           note="db rows -> kit files (different units, new_count is null)",
+                           same_unit=False)
+        else:
+            rc = _recorded(step, input_count=audit.count_rows(db),
+                           output_fn=lambda: audit.count_rows(db),
+                           note="db unchanged; candidates are not materialized here")
         if rc != 0:
             return rc
     backfill_script = _script("05_deep_backfill.py")
@@ -406,8 +439,12 @@ def build(args: argparse.Namespace) -> int:
     apply_script = _script("08_l2_apply.py")
     if args.apply_unsigned and apply_script.is_file() and (l2 / "l2_profile_patches").is_dir():
         kit_next = pathlib.Path(args.kit_next).expanduser() if args.kit_next else kit.parent / "kit_next"
-        rc = _run([sys.executable, "-X", "utf8", str(apply_script),
-                   "--kit", str(kit), "--l2", str(l2), "--out", str(kit_next)])
+        rc = _recorded([sys.executable, "-X", "utf8", str(apply_script),
+                        "--kit", str(kit), "--l2", str(l2), "--out", str(kit_next)],
+                       name="08_l2_apply", input_count=audit.count_candidates(l2),
+                       output_fn=lambda: audit.count_md(kit_next),
+                       note="candidates -> kit_next files (different units, new_count is null)",
+                       same_unit=False)
         if rc != 0:
             return rc
         kit = kit_next
@@ -422,10 +459,12 @@ def build(args: argparse.Namespace) -> int:
             rc = _run(step)
             if rc != 0:
                 return rc
-    rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
-               "--target", str(kit), "--strict",
-               "--raw-root", str(raw)]
-              + (["--enforce-score"] if getattr(args, "enforce_score", False) else []))
+    rc = _recorded([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
+                    "--target", str(kit), "--strict",
+                    "--raw-root", str(raw)]
+                   + (["--enforce-score"] if getattr(args, "enforce_score", False) else []),
+                   name="03_validate_kit", input_count=audit.count_md(kit), output_fn=None,
+                   note="kit files validated; output_count not applicable")
     # Issue #90: a fresh draft is always pending personal review; confirmation
     # is a separate human action (`review --confirm`), never an Agent step.
     _write_review_status(kit, REVIEW_PENDING, note="fresh build; pending personal review")
@@ -435,6 +474,8 @@ def build(args: argparse.Namespace) -> int:
                         review_status=REVIEW_PENDING)
     path = _write_receipt("build", payload)
     print("BUILD_OK" if rc == 0 else "BUILD_FAIL")
+    if ledger is not None:
+        print(f"LEDGER {ledger}")
     print("receipt:", path)
     return rc
 
@@ -735,6 +776,8 @@ def main() -> int:
                    help="output of the unsigned layer-2 pending zone (default: <kit parent>/kit_next)")
     p.add_argument("--enforce-score", action="store_true",
                    help="fail when the issue #96 scorecard misses a threshold (default: advisory)")
+    p.add_argument("--ledger", default=None,
+                   help="append one JSONL row per step to this pipeline ledger (issue #145)")
     p.set_defaults(func=build)
 
     p = sub.add_parser("l2-apply", help="apply L2 candidates as an unsigned pending zone")
