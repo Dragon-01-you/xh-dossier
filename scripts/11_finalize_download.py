@@ -52,8 +52,11 @@ def main() -> int:
     if args.only:
         partials = [p for p in partials if args.only in p.name]
     if not partials:
-        print("FINALIZE_NONE: 没有 .crdownload")
-        return 1
+        # P17: no partial download is a normal outcome (browser may have saved
+        # directly, or the user never started one). Exit 1 made wrappers treat
+        # a clean state as a failure.
+        print("FINALIZE_NONE: 没有 .crdownload（可能浏览器已直接保存，属于正常）")
+        return 0
 
     ok = 0
     for path in partials:

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 # markdown. Order matters: a label is matched by prefix containment.
 SLOT_LABELS: dict[str, tuple[str, ...]] = {
     "name": ("称呼",),
-    "identity": ("身份", "阶段"),
+    "identity": ("身份", "阶段", "身份阶段", "当前阶段"),
     "mainline": ("当前项目", "当前主线", "主线", "核心项目"),
     "time_boundary": ("时间", "时段"),
     "platform": ("平台",),
@@ -58,9 +58,20 @@ SLOT_HEADING: dict[str, str] = {
 
 RULE_VERB_RE = re.compile(r"(确认|同意|不要|禁止|不许|必须|绝不|删|改|红线|规则|底线)")
 PRINCIPLE_CODE_RE = re.compile(r"^\s*(?P<code>\d[A-Z])\s*[（(](?P<text>.+)[）)]\s*$")
-BULLET_RE = re.compile(r"^\s*[-*]\s*(?P<label>[^：:]+)[：:]\s*(?P<value>.+)$")
+BULLET_RE = re.compile(r"^\s*[-*]\s+(?P<label>[^：:]+)[：:]\s*(?P<value>.+)$")
 NUMBERED_RE = re.compile(r"^\s*\d+[.、)）]\s*(?P<label>[^：:：]+)[：:]\s*(?P<value>.+)$")
+TABLE_ROW_RE = re.compile(r"^\s*\|(?P<label>[^|]+)\|(?P<value>[^|]+)\|\s*$")
+BOLD_LABEL_RE = re.compile(r"^\s*(?:\*\*|__)(?P<label>[^*_]+)(?:\*\*|__)\s*[：:]\s*(?P<value>.+)$")
+SELF_LABEL_RE = re.compile(r"^\s*我的?(?P<label>[^是为：:，,]{2,12})(?:是|为|：:|，)\s*(?P<value>.+)$")
+PLAIN_LABEL_RE = re.compile(r"^\s*(?P<label>[^：:]{2,20})[：:]\s*(?P<value>.+)$")
+QA_QUESTION_RE = re.compile(r"^\s*(?:问|Q)\s*[：:]\s*(?P<label>.+)$", re.IGNORECASE)
+QA_ANSWER_RE = re.compile(r"^\s*(?:答|A)\s*[：:]\s*(?P<value>.+)$", re.IGNORECASE)
 ROUND_FILE_RE = re.compile(r"(?:round|stage)[-\s]?(\d+)\.md$", re.IGNORECASE)
+
+EMPTY_VALUE_MARKERS = ("本阶段无", "本阶段没有", "暂无", "无", "没有", "未采集",
+                        "不适用", "不需要", "无内容", "none", "n/a", "-")
+META_PAREN_MARKERS = ("应吸收", "数字编号", "待补充", "待确认", "说明", "示例",
+                      "可选", "原样", "格式", "问题", "阶段目标", "注")
 
 # Clauses that are product complaints about the interviewer itself, not
 # durable facts about the user. They must not be lifted into the kit.
@@ -129,9 +140,28 @@ class InterviewBundle:
 
 def _classify_label(label: str) -> str | None:
     label = label.strip()
+    # Match a label as a whole segment, not as a substring. This stops
+    # "正反例滚动账" from being routed to the negative-example slot merely
+    # because it contains the characters "反例".
+    normalized_raw = re.sub(r"[\s：:（）()\[\]【】]+", "", label)
+    normalized_raw = re.sub(r"[？?！!。.]+$", "", normalized_raw)
+    normalized_stripped = re.sub(r"(是什么|有哪些|如下|记录)$", "", normalized_raw)
+    normalized = re.sub(r"^(我的|当前|核心|主要|个人|本阶段)", "", normalized_stripped)
+    segments = [s for s in re.split(r"[、，,；;/\-]", normalized) if s]
+    stripped_segments = [s for s in re.split(r"[、，,；;/\-]", normalized_stripped) if s]
+    raw_segments = [s for s in re.split(r"[、，,；;/\-]", normalized_raw) if s]
     for slot, labels in SLOT_LABELS.items():
-        if any(lab in label for lab in labels):
-            return slot
+        for alias in labels:
+            if normalized_raw == alias or alias in raw_segments:
+                return slot
+            if normalized_stripped == alias or alias in stripped_segments:
+                return slot
+            if normalized == alias or alias in segments:
+                return slot
+            # "反例1" / "准则2" style numbering.
+            if any(seg == alias or (seg.startswith(alias) and seg[len(alias):].isdigit())
+                   for seg in segments):
+                return slot
     return None
 
 
@@ -143,6 +173,15 @@ def _clean_fact_text(slot: str, text: str) -> str:
         m = re.search(r"「([^」]+)」", t)
         if m:
             t = m.group(1)
+    # Interview notes often leave trailing meta-parentheses such as
+    # "在职（数字编号，应吸收）". Only strip parentheses that carry the meta
+    # vocabulary; a meaningful parenthetical (e.g. a product name) stays.
+    t = re.sub(
+        r"[（(][^（）()]*?(?:" + "|".join(map(re.escape, META_PAREN_MARKERS)) + r")[^（）()]*[）)]",
+        "", t,
+    ).strip()
+    t = re.sub(r"[（(]\s*$", "", t).strip()
+    t = re.sub(r"[（(][^）)]*$", "", t).strip()
     # Plain principle clauses may keep a stray option letter: "A（目标与真需求优先）".
     t = re.sub(r"^\s*\d?[A-Z]\s*[（(]", "", t)
     t = re.sub(r"[）)]\s*$", "", t).strip()
@@ -160,6 +199,11 @@ def _parse_value(slot: str, value: str, source_file: str, line: int,
     value = value.strip()
     if not value or value in ("[待确认]", "待确认"):
         return []
+    if slot in ("positive", "negative", "rule", "principle"):
+        compact = re.sub(r"[\s，。；、：:（）()「」『』/／·\-_]", "", value)
+        if compact in {re.sub(r"[\s，。；、：:（）()「」『』/／·\-_]", "", m)
+                       for m in EMPTY_VALUE_MARKERS}:
+            return []
     facts: list[InterviewFact] = []
     if slot in ("principle",):
         # `1A（目标与真需求优先）/ 2C（内外双验收）/ 3B（...）`
@@ -212,17 +256,45 @@ def _parse_markdown(path: pathlib.Path, bundle: InterviewBundle) -> None:
             if existing.slot != fact.slot:
                 continue
             shared = new_grams & _bigrams(existing.text)
-            if len(shared) >= 2:
+            # Short facts ("在职" vs "在职（...）") have too few bigrams for a
+            # two-bigram threshold; one shared bigram is already a duplicate.
+            threshold = 1 if min(len(_normalize(fact.text)),
+                                 len(_normalize(existing.text))) <= 4 else 2
+            if len(shared) >= threshold:
                 return
         seen.add(key)
         bundle.facts.append(fact)
 
+    pending_question = ""
     for lineno, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
-        m = BULLET_RE.match(line) or NUMBERED_RE.match(line)
-        if not m:
+        label = value = ""
+        matched = False
+        q = QA_QUESTION_RE.match(line)
+        if q:
+            pending_question = q.group("label").strip()
             continue
-        label, value = m.group("label").strip(), m.group("value").strip()
+        a = QA_ANSWER_RE.match(line)
+        if a:
+            label, value = pending_question, a.group("value").strip()
+            pending_question = ""
+            matched = bool(label)
+        if not matched:
+            for regex in (BULLET_RE, NUMBERED_RE, BOLD_LABEL_RE, TABLE_ROW_RE,
+                          SELF_LABEL_RE, PLAIN_LABEL_RE):
+                m = regex.match(line)
+                if not m:
+                    continue
+                candidate_label = m.group("label").strip()
+                candidate_value = m.group("value").strip()
+                if regex is TABLE_ROW_RE:
+                    if set(candidate_label) <= set("-: ") or candidate_label in ("标签", "项目", "字段"):
+                        continue
+                label, value = candidate_label, candidate_value
+                matched = True
+                break
+        if not matched:
+            continue
         if any(meta in label for meta in META_LABELS):
             continue
         slot = _classify_label(label)

@@ -330,6 +330,31 @@ def bootstrap(args: argparse.Namespace) -> int:
     return _run(cmd)
 
 
+def _detect_interview_dir(raw: pathlib.Path, kit: pathlib.Path) -> pathlib.Path | None:
+    """Find the default S1 interview directory without guessing unrelated paths.
+
+    The official quick-start stores raw in ``work/raw`` and interview answers in
+    ``work/interview``. Only look beside those two inputs; never search the
+    whole disk or pick a random ``interview`` folder.
+    """
+    candidates = [raw.parent / "interview", raw.parent.parent / "interview",
+                  kit.parent / "interview"]
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except OSError:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not candidate.is_dir():
+            continue
+        if any(candidate.glob("*.md")):
+            return candidate
+    return None
+
+
 def build(args: argparse.Namespace) -> int:
     """One-command chain: raw chat -> index -> match -> 6-file draft -> L2 proposal -> validate."""
     raw = pathlib.Path(args.raw).expanduser()
@@ -338,15 +363,33 @@ def build(args: argparse.Namespace) -> int:
     l2 = pathlib.Path(args.l2).expanduser()
     report = pathlib.Path(args.report).expanduser()
     interview = pathlib.Path(args.interview).expanduser() if args.interview else None
+    if interview is None and not getattr(args, "no_interview", False):
+        detected = _detect_interview_dir(raw, kit)
+        if detected is not None:
+            interview = detected
+            print(f"INTERVIEW_AUTO {interview}")
+        else:
+            # A common failure is: S1 wrote the answers, but the one-command
+            # build silently ignored them. Make that visible instead of
+            # producing a thin kit with interview=0.
+            expected = raw.parent / "interview"
+            if expected.is_dir():
+                print(f"INTERVIEW_EMPTY_OR_NO_MD {expected}")
+            else:
+                print("INTERVIEW_NONE: 未传 --interview，且旁边没有可读的 interview/ 目录")
     bootstrap_cmd = [sys.executable, "-X", "utf8", str(_script("04_bootstrap_kit.py")),
                       "--db", str(db), "--out", str(kit)]
     if interview is not None:
         bootstrap_cmd += ["--interview", str(interview)]
+    match_cmd = [sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
+                 "--db", str(db), "--out", str(report)]
+    keywords = getattr(args, "keywords", None)
+    if keywords:
+        match_cmd += ["--keywords", *keywords]
     steps = [
         [sys.executable, "-X", "utf8", str(_script("01_clean_and_index.py")),
          "--raw", str(raw), "--db", str(db), "--query", args.query],
-        [sys.executable, "-X", "utf8", str(_script("02_four_way_match.py")),
-         "--db", str(db), "--out", str(report)],
+        match_cmd,
         bootstrap_cmd,
     ]
     for step in steps:
@@ -380,7 +423,8 @@ def build(args: argparse.Namespace) -> int:
             if rc != 0:
                 return rc
     rc = _run([sys.executable, "-X", "utf8", str(_script("03_validate_kit.py")),
-               "--target", str(kit), "--strict"]
+               "--target", str(kit), "--strict",
+               "--raw-root", str(raw)]
               + (["--enforce-score"] if getattr(args, "enforce_score", False) else []))
     # Issue #90: a fresh draft is always pending personal review; confirmation
     # is a separate human action (`review --confirm`), never an Agent step.
@@ -515,6 +559,8 @@ def backfill(args: argparse.Namespace) -> int:
         cmd.append("--confirm")
     if args.broad:
         cmd.append("--broad")
+    if getattr(args, "init_signing_key", False):
+        cmd.append("--init-signing-key")
     return _run(cmd)
 
 
@@ -673,9 +719,13 @@ def main() -> int:
     p.add_argument("--l2", default=str(WORK / "layer2"))
     p.add_argument("--report", default=str(WORK / "backfill_candidates.md"))
     p.add_argument("--query", default="项目", help="keyword used for the final FTS recall step")
+    p.add_argument("--keywords", nargs="*", default=None,
+                   help="first-reflow exact keywords; derive them from the interview, not the fixed defaults")
     p.add_argument("--interview", "--answers", dest="interview", default=None,
                    help="访谈目录（answers.md + stage-N.md；兼容 round-N.md）或单个 answers.md；"
-                        "访谈答案作为 A 级基准入稿，raw 回填只作补证")
+                        "访谈答案作为 A 级基准入稿，raw 回填只作补证；不传时自动探测 work/interview")
+    p.add_argument("--no-interview", action="store_true",
+                   help="显式关闭访谈自动探测（只做 raw 初稿）")
     p.add_argument("--skip-retrieval", action="store_true", help="skip the temporal/graph/FTS index step")
     p.add_argument("--apply-unsigned", dest="apply_unsigned", action="store_true", default=True,
                    help="apply L2 candidates as a pending zone in kit_next (default)")
@@ -718,6 +768,8 @@ def main() -> int:
     p.add_argument("--apply-signed", action="store_true")
     p.add_argument("--confirm", action="store_true")
     p.add_argument("--broad", action="store_true", help="also propose durable records not cited by the kit")
+    p.add_argument("--init-signing-key", action="store_true",
+                   help="create the per-user signing key once; required before signing")
     p.set_defaults(func=backfill)
 
     p = sub.add_parser("package", help="build a release zip without .git/work")
@@ -726,8 +778,10 @@ def main() -> int:
 
     p = sub.add_parser("coverage", help="reconcile raw export count against session list count (#93)")
     p.add_argument("--raw", default=str(WORK / "raw"))
-    p.add_argument("--expected", type=int, required=True)
-    p.add_argument("--list", dest="manifest", default=None, help="optional session title manifest")
+    p.add_argument("--expected", type=int, required=True,
+                   help="平台会话列表页看到的会话总数（不是导出文件数；一个会话可能导出多个文件）")
+    p.add_argument("--list", dest="manifest", default=None, metavar="TITLES.txt",
+                   help="可选：每行一个会话标题的清单；示例 `xh.py coverage --expected 938 --list titles.txt`")
     p.set_defaults(func=coverage)
 
     p = sub.add_parser("status", help="show work dirs and scripts; optional custom dataset views (#99)")

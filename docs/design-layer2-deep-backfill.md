@@ -211,6 +211,7 @@ pending ──独立AI双尺审查(≤3轮)──> reviewed ──本人真实�
 ```
 
 - `signed` 必须记录签字人与时间；无签字记录的条目在 `l2_candidates.md` 中始终显示 `[待确认]`。
+- **P15 机制防线（2026-11-25 起）**：`signed` 行必须带 `signature_algo=hmac-sha256-v1` 与 `signature`，签名 key 默认在仓库外 `~/.xh-dossier/signing.key`（或 `XH_SIGNING_KEY`），首次用 `--init-signing-key` 生成；`--apply-signed` 先验签名与 append-only `l2_review.audit.jsonl` 哈希链，任一不符整批拒绝。手工把 ledger 的 `pending` 改成 `signed` 不再能写正式档案。它防的是“手改/误改”，不是绝对身份认证：有文件写权限的人仍可连 key 一起伪造，文档和验收必须保留这句话。
 - "本人亲历"是硬门禁：`□ AI 代做/转述/材料` 被勾选即 `rejected`（对齐 `AGENTS.md:42` "禁止把 AI 代做成果冒充本人原子卡"）。
 - `needs_llm` 状态显式暴露给用户，不伪装成通过（详见 §7）。
 

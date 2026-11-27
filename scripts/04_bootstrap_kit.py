@@ -439,7 +439,8 @@ def _bullet(record: Record, idx: int, pending_note: str = "") -> str:
 
 
 def _conflict_note(fact: INTERVIEW.InterviewFact) -> str:
-    return f"[待确认] 与访谈「{fact.text}」不一致；以访谈 A 级为准，本条需本人裁定，不得覆盖访谈记录"
+    return (f"[待确认] 与访谈「{fact.text}」可能不同类或存在冲突；"
+            "两者并存待本人裁定，以访谈 A 级为准，不得覆盖访谈记录")
 
 
 def _pending(record: Record, question: str) -> str:
@@ -878,7 +879,15 @@ def build_kit(db_path: pathlib.Path, out_dir: pathlib.Path,
         KIT_04_CANONICAL: _cases_md(negatives, positives, bundle),
     }
     for name, body in files.items():
-        (out_dir / name).write_text(body.rstrip() + "\n", encoding="utf-8")
+        if name == "AGENTS.md":
+            (out_dir / name).write_text(body.rstrip() + "\n", encoding="utf-8")
+        else:
+            # 08_l2_apply only appends before this explicit end anchor; a missing
+            # anchor is a safe-stop, never a blind append to the file tail.
+            (out_dir / name).write_text(
+                body.rstrip() + "\n\n[XH-L2-PENDING-END]\n",
+                encoding="utf-8",
+            )
 
     # Older real kits were written under the legacy alias `04-反面案例清单.md`.
     # Drop a stale legacy copy from a reused output dir so the validator reads

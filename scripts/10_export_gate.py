@@ -57,6 +57,17 @@ def main() -> int:
     args = parser.parse_args()
 
     raw_dir = args.raw.expanduser().resolve()
+    # P7: a missing directory is not the same as "the export button is missing".
+    # The old code collapsed both into EXPORT_BUTTON_MISSING and sent the user
+    # to click a button that was never the problem.
+    if not raw_dir.is_dir():
+        print("EXPORT_DIR_MISSING")
+        print(f"路径不存在：{raw_dir}")
+        print("先确认导出目录/挂载盘是否正确；需要时创建目录后重跑：")
+        print(f'  mkdir "{raw_dir}"')
+        print("这一步只检查落盘，不会替你点浏览器导出。")
+        return 2
+
     deadline = time.time() + max(0, args.wait_seconds)
     while True:
         landed = landed_files(raw_dir)

@@ -2,6 +2,10 @@
 
 > For any AI Agent entering this workspace (Claude Code, Codex, Cursor, Gemini CLI, Antigravity, etc.): read `GLOSSARY.md` and relevant ADRs in `docs/adr/` before modifying code or proposing architectural changes.
 
+## Project map
+
+Start with `AGENT_MAP.md`: project purpose, S0–S7 stages, directory/command map, blocker routing, current release gate, and hard boundaries. It is the navigation layer; `AGENT_START_HERE.md` is the step-by-step operator manual. If the two disagree, `AGENT_MAP.md` owns stage/route decisions and `AGENT_START_HERE.md` owns command detail.
+
 ## Core Principles
 
 1. **Zero PII Leak**: Never commit real personal chat logs (`raw/`), built SQLite databases (`*.db`), or user-specific personal files into git. Test only against `examples/sample_raw/` or isolated temp directories.

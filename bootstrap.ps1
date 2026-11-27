@@ -2,6 +2,7 @@
     [string]$InstallDir = "$env:LOCALAPPDATA\XH-Dossier\python",
     [string]$Version = "3.12.10",
     [string]$ScriptsDir = "",
+    [string]$PythonZip = "",
     [switch]$Force
 )
 
@@ -62,16 +63,23 @@ if ($found -and -not $Force) {
 
 $zipName = "python-$Version-embed-amd64.zip"
 $zipUrl = "https://www.python.org/ftp/python/$Version/$zipName"
-$zipPath = Join-Path $env:TEMP $zipName
-Write-Output "PYTHON_MISSING: downloading $zipUrl"
-
-try {
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
-    Write-Output "DOWNLOAD_OK: $zipPath"
-} catch {
-    Write-Output "BOOTSTRAP_FAIL: Python 便携包下载失败：$($_.Exception.Message)"
-    Write-Output "fallback: 打开 https://www.python.org/downloads/ 手动安装 Python 3.11+，然后重跑 install.ps1"
-    exit 2
+$zipPath = if ($PythonZip) { $PythonZip } else { Join-Path $env:TEMP $zipName }
+if ($PythonZip) {
+    Write-Output "PYTHON_ZIP: $zipPath"
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        Write-Output "BOOTSTRAP_FAIL: 指定的 Python 便携包不存在：$zipPath"
+        exit 2
+    }
+} else {
+    Write-Output "PYTHON_MISSING: downloading $zipUrl"
+    try {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+        Write-Output "DOWNLOAD_OK: $zipPath"
+    } catch {
+        Write-Output "BOOTSTRAP_FAIL: Python 便携包下载失败：$($_.Exception.Message)"
+        Write-Output "fallback: 打开 https://www.python.org/downloads/ 手动安装 Python 3.11+，然后重跑 install.ps1"
+        exit 2
+    }
 }
 
 if (-not (Test-Path -LiteralPath $zipPath) -or (Get-Item -LiteralPath $zipPath).Length -lt 1000000) {

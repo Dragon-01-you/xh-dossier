@@ -350,8 +350,6 @@ def score_kit(
     answerable = len(answered) / len(ANSWERABLE_QUESTIONS)
 
     checked: list[tuple[str, str]] = [b for bullets in slot_bullets.values() for b in bullets]
-    raw_root = resolve_raw_root(target_dir, raw_root)
-    raw_text = load_raw_text(raw_root)
     unresolved: list[str] = []
     raw_zero_hits: list[str] = []
     for file_name, line in checked:
@@ -359,13 +357,15 @@ def score_kit(
         if reason:
             unresolved.append(f"{file_name}: {reason}")
             continue
-        # Only A-level claims must be exact in the raw export. B-level candidates
-        # may be a first-pass paraphrase; they are reported separately, not failed.
-        if line.startswith("- **A级·访谈") and raw_text:
-            quote = _quote_from_marker(line)
-            if quote and not quote_in_raw(quote, raw_text):
-                raw_zero_hits.append(f"{file_name}: RAW_ZERO_HIT")
-                unresolved.append(f"{file_name}: RAW_ZERO_HIT")
+        # A-level interview facts are backed by the interview digest copied
+        # next to the kit (`_evidence/interview-lines.md`), not by the raw chat
+        # export. The old exact-substring check against raw made every normal
+        # interview fail (issue P1): the answer text is not a chat message.
+        # `_verify_pending_source` above already verifies the digest line and
+        # the quote near it, so only the source shape is checked here.
+        if line.startswith("- **A级·访谈"):
+            if "_evidence/interview-lines.md" not in line:
+                unresolved.append(f"{file_name}: A_LEVEL_SOURCE_NOT_INTERVIEW_DIGEST")
     accuracy = 1.0 if not checked else (len(checked) - len(unresolved)) / len(checked)
     noise_rate = 1.0 - accuracy
 
@@ -838,7 +838,13 @@ def main() -> int:
             "下一步：把聊天记录放进 work/raw 跑 build，或先完成 6 个阶段访谈填完模板，再重跑本校验；"
             "语义提示同理，按「需访谈」处理或补原话。"
         )
-    print("VALIDATE_OK" if ok else "VALIDATE_FAIL")
+    scorecard_failed = any(m.startswith("SCORECARD_FAIL") for m in msgs)
+    if ok:
+        # P5: never print a bare VALIDATE_OK next to a red scorecard. Structure
+        # may pass while the scorecard is red; make one combined, truthful signal.
+        print("VALIDATE_OK_SCORECARD_FAIL" if scorecard_failed else "VALIDATE_OK")
+    else:
+        print("VALIDATE_FAIL")
     return 0 if ok else 1
 
 

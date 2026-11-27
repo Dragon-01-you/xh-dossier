@@ -47,6 +47,7 @@
 > - 要让 Agent 真的控制浏览器，再加 [sctl Browser](https://microsoftedge.microsoft.com/addons/detail/sctl-browser/nbmnkdfbjdhbdjjffgkocfdkemockepa) + [sctl](https://github.com/scriptscat/sctl)；AfterChat 本身不能控制浏览器。
 
 详见 [docs/02-multi-platform-export.md](docs/02-multi-platform-export.md)，或先运行仓库内置的同意门禁引导脚本 `python -X utf8 scripts/00_export_wizard.py --browser edge` 获取开源扩展 **ScriptCat（脚本猫）** 官方安装入口。导出前先跑 `python -X utf8 scripts/10_export_gate.py --raw work/raw/afterchat --download-dir "你的下载目录"`；没有真实 `.md`/`.zip` 就停，不进入入库。
+**导出按钮谁点（P14）**：正常路径是**本人**在聊天页点 AfterChat 的导出菜单，文件才会落到 `work/raw`；Agent 不能替你登录，也不能替你点这个按钮。只有在没有扩展、或扩展装不上时，才走**零扩展 DOM 兜底**：由 Agent 打开已登录的聊天页，用 `scripts/dom_export.js` 在浏览器控制台导出当前会话为 Markdown。两条路径都失败时，停在 `EXPORT_DIR_MISSING` / `EXPORT_BUTTON_MISSING`，先修环境，不要拿空目录继续跑。
 **⚠️ 装扩展只是装了「引擎」，还必须装一个「导出脚本」才干活**：多平台推荐 **AfterChat**（GreasyFork #589622，约 30 平台），单平台备选见指南里的「按平台选脚本」表。另一个高频坑是浏览器的「下载前询问保存位置」——导出跑完会弹系统「另存为」窗口，需本人点保存，否则进度看似卡住、文件不落地。
 **网络退路**：浏览器商店、scriptcat.org 或 GreasyFork 打不开 / 超时时，引擎 ScriptCat 可直连 GitHub 开源发布页下载压缩包（向导加 `--download-release`）；按平台与场景的主路径 / 备选路径见指南「网络场景退路」一节。
 **⚠️ 浏览器开关最容易卡住的一步**：
@@ -121,7 +122,7 @@ python -X utf8 scripts/99_smoke.py        # 输出 SMOKE_OK 即流水线可用�
   ```
 
   或下载 `.tar.gz` 包后：`tar -xzf 发布包.tar.gz -C 目标目录`。
-- **Windows 主路径**：资源管理器右键“全部解压”（Expand-Archive / .NET），或 `python -m zipfile -e 发布包.zip 目标目录`。
+- **Windows 主路径**：资源管理器右键“全部解压”（Expand-Archive / .NET），或 `python -m zipfile -e 发布包.zip 目标目录`。**不要用 `tar -xf 发布包.zip` 解 zip**：Windows 自带 bsdtar 会把中文名按 OEM 代码页处理，照样出乱码；`tar` 只用于 `.tar.gz`。
 - **退路**：`bsdtar -xf 发布包.zip`（libarchive，认 UTF-8）。`unzip -O UTF-8` 只是 Debian/Ubuntu 的本地补丁，不是上游标准，部分发行版没有这个选项，不能当主路径。
 
 `doctor` 会把两类问题分开报：**“文件名编码损坏（文件其实在，不是缺模板）”** 表示文件在、只是名字乱码，按上面命令重新解压即可；**“缺少必需文件”** 才是仓库真的不完整。

@@ -1,0 +1,139 @@
+{
+  "schema": "xh-agent-map-v1",
+  "updated": "2026-11-25",
+  "project": {
+    "name": "XH-Dossier",
+    "one_liner": "把散落在几十个聊天窗口里的本人原话，收敛成 6 份带证据、可迁移、能被人签字的个人判断档案。",
+    "not": ["聊天记录摘要器", "自动生成人设", "替本人签字"],
+    "acceptance": "换一个没有上下文的 Agent，只给 6 份档案，能答对当前主线、判断准则和硬规则。"
+  },
+  "core_priority": {
+    "rule": "只保两个核心：访谈6阶段先拿平台清单，两次回流产出6份核心文件；导出默认已有。其他标准能砍就砍。",
+    "order": "访谈(6阶段,先拿平台清单) -> 浏览器/导出(默认已做) -> 第一次回流(精确+相似,验证访谈,扩到6x8) -> 第二次回流(图+时间线,补缺口/冲突,签字回写) -> 回流去向(先6份,放不进的进知识库候选) -> 加固回流(后期靠项目反思,重复错误变检查/模板/门禁)",
+    "environment_mode": "环境准备是后期第二模式，不塞进当前回流",
+    "question": "它是否直接提升“上下文 -> 带证据记忆 -> 核心文件”？不能就放后期候选。",
+    "contract": "docs/core-reflow.md"
+  },
+  "stages": [
+    {
+      "id": "S0",
+      "goal": "体检环境",
+      "command": "python -X utf8 scripts/xh.py doctor",
+      "success": "DOCTOR_OK",
+      "outputs": [],
+      "on_fail": ["README 3.0 安装 Python 3.11+", "文件名乱码用 python -m zipfile -e"]
+    },
+    {
+      "id": "S1",
+      "goal": "6 阶段访谈，拿到本人拍板",
+      "command": "skills/onboarding-interviewer/SKILL.md + work/interview/stage-N.md",
+      "success": "BOOTSTRAP_OK interview>0",
+      "outputs": ["work/interview/", "work/kit/ 草稿"],
+      "on_fail": ["没有访谈先跑 S1", "只有 raw 只能出薄初稿，不算完成"]
+    },
+    {
+      "id": "S2",
+      "goal": "导出本人可见聊天原件",
+      "command": "本人点 AfterChat；或 scripts/dom_export.js 零扩展兜底",
+      "success": "EXPORT_OK files=N",
+      "outputs": ["work/raw/"],
+      "on_fail": ["EXPORT_DIR_MISSING 先核对路径", "有 .crdownload 用 11_finalize_download.py"]
+    },
+    {
+      "id": "S3",
+      "goal": "清洗并建 SQLite 冷库",
+      "command": "python -X utf8 scripts/xh.py ingest --raw work/raw --db work/unified_index.db --query 记错",
+      "success": "INDEX_OK(N)",
+      "outputs": ["work/unified_index.db"],
+      "on_fail": ["0 条检查导出格式/编码", "不要手写假记录"]
+    },
+    {
+      "id": "S4",
+      "goal": "查询词从访谈来，精确+相似多路匹配出一层候选",
+      "command": "python -X utf8 scripts/xh.py match --db work/unified_index.db --out work/backfill_candidates.md",
+      "success": "FOUR_WAY_OK",
+      "outputs": ["work/backfill_candidates.md"],
+      "on_fail": ["查询词从访谈重生成，不要固定记错/验收/拖延/口音", "空报告不等于没有事实"]
+    },
+    {
+      "id": "S5",
+      "goal": "生成并校验 6 份档案",
+      "command": "python -X utf8 scripts/xh.py build --raw work/raw --db work/unified_index.db --kit work/kit --l2 work/layer2",
+      "success": "VALIDATE_OK",
+      "outputs": ["work/kit/", "work/kit_next/"],
+      "on_fail": ["VALIDATE_FAIL 按报错补槽位/删假引用", "SCORECARD_FAIL 看 docs/scorecard.md"]
+    },
+    {
+      "id": "S6",
+      "goal": "在已有 6 份上接图+时间线，补缺口/找冲突；能回6份就回，回不去进知识库候选；逐条签字",
+      "command": "python -X utf8 scripts/xh.py backfill --profiles work/kit --first-pass work/backfill_candidates.md --db work/unified_index.db --out work/layer2",
+      "success": "L2_BACKFILL_OK / APPLY_SIGNED applied=N",
+      "outputs": ["work/layer2/l2_candidates.md", "work/layer2/l2_review.jsonl", "work/layer2/l2_review.audit.jsonl", "work/layer2/knowledge_candidates.md"],
+      "on_fail": ["SIGNING_KEY_MISSING 先 --init-signing-key", "SIGNATURE_INVALID/AUDIT_* 停，恢复 ledger 重新签字", "不要手改 status"]
+    },
+    {
+      "id": "S7",
+      "goal": "本人复核 + 独立 Agent 盲测 + 打包交付",
+      "command": "python -X utf8 scripts/xh.py review --confirm --kit work/kit; verify --strict; blind",
+      "success": "VALIDATE_OK -> VERIFY_OK -> BLIND_PASS",
+      "outputs": ["work/kit/_evidence/review.json", "work/blind/盲测三问.md", "dist/xh-dossier.zip"],
+      "on_fail": ["BLIND_FAIL 回 S1/S6 补事实", "VERIFY_BLOCKED_REVIEW 先 review --confirm"]
+    }
+  ],
+  "directories": {
+    "AGENT_MAP.md": "项目地图/卡点分流",
+    "AGENT_START_HERE.md": "零环境 Agent 详细操作手册",
+    "AGENTS.md": "接手 AI 的合作站位与硬边界（只读）",
+    "scripts/xh.py": "唯一推荐入口",
+    "scripts/01_clean_and_index.py": "S3 清洗+索引",
+    "scripts/02_four_way_match.py": "S4 多路匹配，只出报告",
+    "scripts/03_validate_kit.py": "S5/S7 校验",
+    "scripts/04_bootstrap_kit.py": "S5 候选转 6 份草稿",
+    "scripts/05_deep_backfill.py": "S6 二次回流+签字+签名写回",
+    "scripts/08_l2_apply.py": "待确认区写入 kit_next",
+    "scripts/blind_test.py": "S7 盲测包+评分",
+    "scripts/10_export_gate.py": "S2 导出落盘门禁",
+    "scripts/11_finalize_download.py": "S2 .crdownload 收尾",
+    "templates/": "6 份空白模板",
+    "examples/": "合成样例，不是真人访谈",
+    "tests/": "pytest 回归"
+  },
+  "blockers": {
+    "DOCTOR_FAIL": "按 README 3.0 修环境，不要改脚本绕过",
+    "ENV_BLOCKED: login": "交还本人登录，Agent 不代登录、不抓 Cookie",
+    "EXPORT_DIR_MISSING": "核对/创建 raw 目录，不要 ingest 空目录",
+    "EXPORT_BUTTON_MISSING": "装 AfterChat，本人点导出，不要自建后台",
+    "DOWNLOAD_INTERRUPTED": "等下载完成或用 11_finalize_download.py，不要把半截文件当 md",
+    "INDEX_OK(0)": "检查导出格式/编码，不要手写假 raw",
+    "VALIDATE_FAIL": "按报错补槽位/删假引用，不要改 [待确认] 为确定句",
+    "VALIDATE_OK_SCORECARD_FAIL": "当未完成，继续补，不要发布",
+    "SIGNING_KEY_MISSING": "先 --init-signing-key，不要手改 ledger status",
+    "SIGNATURE_INVALID": "停，恢复 ledger 重新签字，不要 --apply-signed 硬写",
+    "VERIFY_BLOCKED_REVIEW": "先 review --confirm，Agent 不代签",
+    "BLIND_FAIL": "回 S1/S6 补事实，不要背答案",
+    "FINALIZE_NONE": "正常；检查浏览器是否已直接保存"
+  },
+  "hard_boundaries": [
+    "不伪造访谈答案；不确定写 [待确认] 并给原文/出处",
+    "不把 assistant 总结/思考过程/提示词当用户记忆",
+    "不把提及时间当事件时间",
+    "不替本人签字；--apply-signed 只在本人逐条确认后执行",
+    "不抓别人的聊天/Cookie/密码/验证码",
+    "缺扩展就停，给官方安装入口，不自建后台",
+    "VALIDATE_OK 不等于可交付；还要 review + 盲测",
+    "改脚本必须补/跑测试"
+  ],
+  "release_gate_2026_11_25": {
+    "structure": [
+      "pytest 全绿",
+      "demo 在空 work 与真实 raw 下都 DEMO_OK",
+      "真实链路 INDEX_OK -> FOUR_WAY_OK -> BOOTSTRAP_OK(interview>0) -> VALIDATE_OK -> BLIND_PASS",
+      "apply-signed 拒绝手改 ledger，正常签字写入并留审计"
+    ],
+    "product": [
+      "本人能看懂 01 主线/02 三条判断/03 硬规则/04 正反例",
+      "新 Agent 只给 6 份档案能答对三问",
+      "导出由本人完成，Agent 不代登录/另存为/签字"
+    ]
+  }
+}

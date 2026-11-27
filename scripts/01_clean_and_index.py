@@ -20,6 +20,15 @@ RECOGNIZED_EXTS = {".json", ".jsonl", ".md", ".txt"}
 
 
 PASTED_NOISE_RE = re.compile(r"\[Pasted text #\d+\]|^\s*[-*_]{3,}\s*$", re.MULTILINE)
+# P18: card/player chrome leaks timestamps like "00:00｜08:04" or "今天 12:28"
+# into assistant text. These are whole UI lines, not conversation content.
+UI_TIME_LINE_RE = re.compile(
+    r"^\s*(?:"
+    r"\d{1,2}:\d{2}(?:\s*[|｜]\s*\d{1,2}:\d{2})?"
+    r"|(?:今天|昨天|前天|刚刚)\s*\d{1,2}:\d{2}"
+    r")\s*$",
+    re.MULTILINE,
+)
 MULTI_SPACE_RE = re.compile(r"\n{3,}")
 
 
@@ -49,6 +58,7 @@ def _read_text_checked(path: pathlib.Path, encoding_stats: dict | None) -> str:
 def clean_text(raw: str) -> str:
     """Remove UI paste placeholders and excessive blank lines while preserving original wording."""
     text = PASTED_NOISE_RE.sub("", raw or "")
+    text = UI_TIME_LINE_RE.sub("", text)
     text = MULTI_SPACE_RE.sub("\n\n", text)
     return text.strip()
 

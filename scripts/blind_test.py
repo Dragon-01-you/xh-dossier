@@ -43,7 +43,7 @@ SECTION_RULES = {
 }
 
 QUESTIONS = [
-    ("Q1", "mainline", "当前主线是什么？只复述档案里的唯一主线候选，不要补档案外的项目。"),
+    ("Q1", "mainline", "当前主线是什么？只复述档案里的当前主线，不要补档案外的项目。"),
     ("Q2", "principle", "核心判断准则有哪些？能写代号就写代号（如 1A），再写要点。"),
     ("Q3", "rule", "硬规则 / 红线有哪些？逐条列出档案里的持久约束。"),
 ]
@@ -194,12 +194,30 @@ def main() -> int:
         print("BLIND_PACKAGE_FAIL: kit directory missing:", args.kit)
         return 2
 
+    # P13: `--score` used to read the answer sheet AFTER build_blind_package(),
+    # which overwrote `out/盲测三问.md` with a blank template. Read the answers
+    # first, and restore them if the score file is the package's own sheet.
+    sheet_text: str | None = None
+    score_is_package_sheet = False
+    if args.score:
+        if not args.score.is_file():
+            print("BLIND_SCORE_MISSING:", args.score)
+            return 2
+        sheet_text = args.score.read_text(encoding="utf-8", errors="replace")
+        try:
+            score_is_package_sheet = args.score.resolve() == (args.out / "盲测三问.md").resolve()
+        except OSError:
+            score_is_package_sheet = False
+
     package = build_blind_package(args.kit, args.out)
     print(f"BLIND_PACKAGE_OK copied={len(package['copied'])} out={args.out}")
+    if sheet_text is not None and score_is_package_sheet:
+        args.score.write_text(sheet_text, encoding="utf-8")
+        print("BLIND_SCORE_SHEET_PRESERVED:", args.score)
 
     if args.score:
         expected = json.loads((args.out / ".expected.json").read_text(encoding="utf-8"))
-        sheet = args.score.read_text(encoding="utf-8")
+        sheet = sheet_text if sheet_text is not None else args.score.read_text(encoding="utf-8")
         result = score_answers(expected, sheet)
         for qid, res in result["questions"].items():
             verdict = "PASS" if res["passed"] else "FAIL"

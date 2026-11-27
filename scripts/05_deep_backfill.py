@@ -28,10 +28,15 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
+import hmac
 import json
+import os
 import pathlib
 import re
+import secrets
 import sqlite3
+import sys
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Literal
@@ -102,9 +107,10 @@ MISTAKE_CUES = ("没理解", "记错", "跑偏", "没上线", "停在最后", "�
 # This is still a proposal layer; every result is needs_llm=true and unsigned.
 BROAD_IDENTITY = ("我是", "我叫", "我在做", "我在学", "我想做", "我打算",
                   "我的项目", "我的目标", "我的主线", "我的背景", "我目前", "我现在")
-BROAD_RULE = ("必须", "禁止", "不要", "不能", "不许", "记住", "铁律", "红线",
+BROAD_RULE = ("禁止", "不要", "不能", "不许", "记住", "铁律", "红线",
               "规则", "底线", "绝不")
-BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "标准", "验收", "价值")
+BROAD_PRINCIPLE = ("原则", "准则", "判断", "优先", "取舍", "标准", "验收", "价值",
+                   "必须先", "先定", "先想", "再动手", "刹车", "喊停", "停一下")
 BROAD_NEGATIVE = ("踩坑", "失败", "返工", "拖延", "崩", "报错", "卡住", "放弃", "白做")
 PERSONAL_TITLE_MARKERS = ("情感", "歌", "心理", "恋爱", "锁", "不知道", "对话主题")
 L2_NOISE_MARKERS = ("练歌", "唱歌", "开锁", "破解", "绕过", "白嫖", "钥匙")
@@ -742,6 +748,128 @@ _SIGN_STATE: dict[str, set[Status]] = {
     "rejected": set(),
 }
 
+SIGNING_KEY_ENV = "XH_SIGNING_KEY"
+SIGNATURE_ALGO = "hmac-sha256-v1"
+
+
+def signing_key_path() -> pathlib.Path:
+    """Key lives outside the repo so a copied ledger alone cannot be signed."""
+    override = os.environ.get("XH_SIGNING_KEY_FILE")
+    if override:
+        return pathlib.Path(override).expanduser()
+    return pathlib.Path.home() / ".xh-dossier" / "signing.key"
+
+
+def load_signing_key() -> bytes | None:
+    env_key = os.environ.get(SIGNING_KEY_ENV, "").strip()
+    if env_key:
+        return env_key.encode("utf-8")
+    path = signing_key_path()
+    if path.is_file():
+        value = path.read_text(encoding="utf-8", errors="replace").strip()
+        return value.encode("utf-8") if value else None
+    return None
+
+
+def init_signing_key() -> pathlib.Path:
+    """Create a per-user key once. The key itself is never printed."""
+    path = signing_key_path()
+    if path.is_file() and path.read_text(encoding="utf-8", errors="replace").strip():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(secrets.token_hex(32), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
+
+
+def _signature_payload(row: dict) -> dict[str, str]:
+    """Fields that must not change after a human signs the row.
+
+    ``status`` is intentionally excluded: a successfully applied row becomes
+    ``archived``. ``signature`` / audit fields are excluded to avoid recursion.
+    """
+    keys = ("candidate_id", "rec_id", "layer", "target_profile",
+            "reviewer", "signed_at", "note")
+    return {k: str(row.get(k, "")) for k in keys}
+
+
+def _row_signature(row: dict, key: bytes) -> str:
+    payload = json.dumps(_signature_payload(row), ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def verify_row_signature(row: dict, key: bytes) -> bool:
+    signature = str(row.get("signature", ""))
+    if not signature or row.get("signature_algo") != SIGNATURE_ALGO:
+        return False
+    return hmac.compare_digest(signature, _row_signature(row, key))
+
+
+def audit_path_for(ledger_path: pathlib.Path) -> pathlib.Path:
+    if ledger_path.name.endswith(".jsonl"):
+        return ledger_path.with_name(ledger_path.name[:-len(".jsonl")] + ".audit.jsonl")
+    return ledger_path.with_name(ledger_path.name + ".audit.jsonl")
+
+
+def append_audit(ledger_path: pathlib.Path, action: str, row: dict) -> None:
+    """Append-only hash chain; a deleted/reordered event is detectable."""
+    audit_path = audit_path_for(ledger_path)
+    prev_hash = ""
+    if audit_path.is_file():
+        rows = [ln for ln in audit_path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+        if rows:
+            try:
+                prev_hash = str(json.loads(rows[-1]).get("hash", ""))
+            except json.JSONDecodeError:
+                prev_hash = "INVALID"
+    event = {
+        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "action": action,
+        "candidate_id": row.get("candidate_id", ""),
+        "status": row.get("status", ""),
+        "reviewer": row.get("reviewer", ""),
+        "payload_hash": hashlib.sha256(
+            json.dumps(_signature_payload(row), ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "prev_hash": prev_hash,
+    }
+    event["hash"] = hashlib.sha256(
+        json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    with audit_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def verify_audit_chain(ledger_path: pathlib.Path) -> tuple[bool, str]:
+    audit_path = audit_path_for(ledger_path)
+    if not audit_path.is_file():
+        return False, "AUDIT_LOG_MISSING"
+    prev_hash = ""
+    for lineno, line in enumerate(audit_path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False, f"AUDIT_JSON_INVALID:{lineno}"
+        stored = str(event.pop("hash", ""))
+        expected = hashlib.sha256(
+            json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if not hmac.compare_digest(stored, expected):
+            return False, f"AUDIT_HASH_INVALID:{lineno}"
+        if str(event.get("prev_hash", "")) != prev_hash:
+            return False, f"AUDIT_CHAIN_BROKEN:{lineno}"
+        prev_hash = stored
+    return True, "ok"
+
+
 
 def update_review(path: pathlib.Path, candidate_id: str, status: Status,
                   reviewer: str, note: str = "") -> dict:
@@ -760,6 +888,19 @@ def update_review(path: pathlib.Path, candidate_id: str, status: Status,
             )
         if not reviewer:
             raise ValueError("SIGNATURE_REQUIRES_REVIEWER: signed needs --by")
+        key = load_signing_key()
+        if key is None:
+            # First use on this machine: create the out-of-repo key once. This
+            # keeps the human flow short while still making a hand-edited
+            # ledger row fail at --apply-signed (it has no valid signature).
+            key_path = init_signing_key()
+            key = load_signing_key()
+            if key is None:
+                raise ValueError(
+                    "SIGNING_KEY_MISSING: cannot read or create signing key; "
+                    f"check permissions on {key_path}"
+                )
+            print(f"SIGNING_KEY_AUTO_CREATED {key_path}", file=sys.stderr)
     # Explicit adjudication loop closed only when a needs_llm item is reviewed
     # back to reviewed; a plain pending->reviewed does not resolve it.
     resolved = bool(row.get("needs_llm_resolved"))
@@ -774,9 +915,20 @@ def update_review(path: pathlib.Path, candidate_id: str, status: Status,
         "reviewed_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "signed_at": datetime.datetime.now().isoformat(timespec="seconds") if status == "signed" else row.get("signed_at"),
     })
+    if status == "signed":
+        key = load_signing_key()
+        assert key is not None  # guarded above
+        row["signature_algo"] = SIGNATURE_ALGO
+        row["signature"] = _row_signature(row, key)
+    elif status != "archived":
+        # A later transition (e.g. signed -> reviewed) invalidates the old
+        # signature; archived keeps it as the historical seal.
+        row.pop("signature", None)
+        row.pop("signature_algo", None)
     ledger[candidate_id] = row
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(v, ensure_ascii=False) for v in ledger.values()) + "\n", encoding="utf-8")
+    append_audit(path, f"status:{status}", row)
     return row
 
 
@@ -793,6 +945,23 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
     """
     if not confirm:
         return {"applied": 0, "rejected": 0, "reason": "NEEDS_CONFIRM"}
+    signed_rows = [(cid, row) for cid, row in ledger.items() if row.get("status") == "signed"]
+    if not signed_rows:
+        return {"applied": 0, "rejected": 0, "reason": "NO_SIGNED_ROWS"}
+    if ledger_path is not None:
+        key = load_signing_key()
+        if key is None:
+            return {"applied": 0, "rejected": len(signed_rows),
+                    "reason": "SIGNING_KEY_MISSING"}
+        chain_ok, chain_reason = verify_audit_chain(ledger_path)
+        if not chain_ok:
+            return {"applied": 0, "rejected": len(signed_rows),
+                    "reason": chain_reason}
+        # Fail closed before touching any profile: one tampered signed row means
+        # the whole ledger is no longer trustworthy.
+        for cid, row in signed_rows:
+            if not verify_row_signature(row, key):
+                return {"applied": 0, "rejected": len(signed_rows), "reason": f"SIGNATURE_INVALID:{cid}"}
     applied = 0
     rejected = 0
     base = profiles_dir.resolve()
@@ -827,6 +996,8 @@ def apply_signed(patches_dir: pathlib.Path, profiles_dir: pathlib.Path,
         row["status"] = "archived"
         row["archived_at"] = datetime.datetime.now().isoformat(timespec="seconds")
         applied += 1
+        if ledger_path is not None:
+            append_audit(ledger_path, "apply:archived", row)
     if ledger_path is not None and applied:
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger_path.write_text(
@@ -910,9 +1081,16 @@ def main() -> int:
     ap.add_argument("--note", default="")
     ap.add_argument("--apply-signed", action="store_true", help="Write signed candidates into profiles")
     ap.add_argument("--confirm", action="store_true", help="Second confirmation for --apply-signed")
+    ap.add_argument("--init-signing-key", action="store_true",
+                    help="Create the per-user signing key once (needed before --sign signed)")
     ap.add_argument("--broad", action="store_true",
                     help="Opt-in: also propose durable identity/rule/principle records not cited by the kit")
     args = ap.parse_args()
+
+    if args.init_signing_key:
+        path = init_signing_key()
+        print(f"SIGNING_KEY_READY {path}")
+        return 0
 
     ledger_path = args.out / "l2_review.jsonl"
     if args.sign:

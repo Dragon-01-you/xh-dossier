@@ -291,7 +291,8 @@ def test_untold_candidate_cross_ref_none():
 
 # --- F7: archived status persisted back to the ledger ---
 
-def test_apply_signed_persists_archived(tmp_path):
+def test_apply_signed_persists_archived(tmp_path, monkeypatch):
+    monkeypatch.setenv("XH_SIGNING_KEY_FILE", str(tmp_path / "signing.key"))
     profiles_dir = tmp_path / "profiles"
     _make_profiles(profiles_dir)
     patches = tmp_path / "patches"
@@ -301,7 +302,14 @@ def test_apply_signed_persists_archived(tmp_path):
         "<!-- L2-BACKFILL-BEGIN -->\n### L2-0001 [待确认] ...\n<!-- L2-BACKFILL-END -->\n",
         encoding="utf-8")
     ledger_path = tmp_path / "l2_review.jsonl"
-    ledger = {"L2-0001": {"candidate_id": "L2-0001", "status": "signed", "target_profile": target}}
+    ledger_path.write_text(
+        json.dumps({"candidate_id": "L2-0001", "layer": 2, "status": "pending",
+                    "target_profile": target, "needs_llm": False,
+                    "needs_llm_resolved": False}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    l2.update_review(ledger_path, "L2-0001", "reviewed", "reviewer")
+    l2.update_review(ledger_path, "L2-0001", "signed", "芯火")
+    ledger = l2.load_review_ledger(ledger_path)
     res = l2.apply_signed(patches, profiles_dir, ledger, confirm=True, ledger_path=ledger_path)
     assert res["applied"] == 1
     rows = l2.load_review_ledger(ledger_path)

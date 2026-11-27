@@ -2,6 +2,8 @@
 
 你只需要 Python 3.11+。核心路径没有第三方依赖；`pytest` 只在开发时用。
 
+> **先看地图**：[AGENT_MAP.md](AGENT_MAP.md) 用一页讲清项目目的、S0–S7 七段、目录/命令、卡点分流和当前上线门；本页是详细操作手册。地图里说“卡住往哪跳”，本页说“每一步怎么敲”。
+
 > **目录要求**：下面所有命令先 `cd` 到仓库根目录再运行；在别的目录用相对路径调脚本会报 `can't open file ... [Errno 2] No such file or directory`，先检查当前目录是不是仓库根。机器上没有 Python 时的安装入口、共享机器 per-user（被 launcher 拦截）退路，见 README「3.0 普通用户零终端安装与预检」。
 
 > 解释器说明：命令里的 `python` 指当前可用解释器；有 py launcher 的 Windows 也可用 `py -3.x`（x 为已装的次版本号）。
@@ -160,6 +162,7 @@ python -X utf8 scripts/xh.py verify --kit work/kit --strict
 ```
 
 看到 `VALIDATE_OK` 才算 6 文件结构合格。若档案还是 `pending_review`，`verify` 会先阻断并提示跑 `review --confirm`。
+如果看到 `VALIDATE_OK_SCORECARD_FAIL`，表示结构过了但评分卡没过，按“未完成”处理，继续补事实/裁主线，不要当 `VALIDATE_OK` 发布。
 盲测包由 `python -X utf8 scripts/xh.py blind --kit work/kit --out work/blind` 生成，只拷六份档案、不带原始聊天 / 访谈 / 数据库；再用一个**全新的** Agent 隔离会话作答 `盲测三问.md`，用 `--score 作答表` 出三问 PASS/FAIL；不能复述判断准则、红线和当前主线，就回到 S1/S6。
 
 ## 4. 快速演示（合成样例，不读你的真实数据）

@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Target = "$env:USERPROFILE\XH-Dossier",
     [string]$Archive = "",
+    [string]$PythonZip = "",
     [switch]$RunDemo,
     [switch]$Force,
     [switch]$ForceBootstrap
@@ -46,6 +47,7 @@ if (-not $pyExe) {
     if (Test-Path -LiteralPath $bootstrap) {
         Write-Output "PYTHON_MISSING: 尝试用 bootstrap.ps1 下载并安装 Python 3.11+。"
         $bootstrapArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-InstallDir', "$env:LOCALAPPDATA\XH-Dossier\python", '-ScriptsDir', (Join-Path $Target 'scripts'))
+        if ($PythonZip) { $bootstrapArgs += @('-PythonZip', $PythonZip) }
         if ($ForceBootstrap) { $bootstrapArgs += '-Force' }
         $bootstrapOutput = & powershell.exe @bootstrapArgs 2>&1
         $bootstrapOutput | ForEach-Object { Write-Output $_ }
@@ -134,8 +136,9 @@ if ($Archive) {
     }
 }
 
+$pyCmd = (@($pyExe) + @($pyArgs) + @("-X", "utf8")) -join ' '
 $version = (& $pyExe @pyArgs -c "import sys; print(sys.version.split()[0])" 2>&1 | Out-String).Trim()
-Write-Output "python: $version ($pyExe $($pyArgs -join ' '))"
+Write-Output "python: $version ($pyCmd)"
 
 Push-Location $Target
 try {
@@ -161,5 +164,5 @@ try {
 }
 
 Write-Output "INSTALL_OK"
-Write-Output "next: cd `"$Target`" ; $pyExe $($pyArgs -join ' ') -X utf8 scripts\xh.py doctor"
+Write-Output "next: cd `"$Target`" ; $pyCmd scripts\xh.py doctor"
 Write-Output "read: $Target\AGENT_START_HERE.md"
